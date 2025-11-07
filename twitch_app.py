@@ -1,17 +1,18 @@
 # twitch_app.py
-# Version: 1.7.0
+# Version: 1.8.0
 # Author: Systems Architect AI
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
+#   1.8.0: - Added optional, colored timestamps to the chat box, which can be
+#            toggled on/off via a checkbox. Timestamp color is adjusted for
+#            readability in both light and dark modes.
 #   1.7.0: - Added a dark mode toggle for the chat box. Usernames remain blue
 #            in both light and dark modes for consistent readability.
 #   1.6.0: - Implemented graceful handling for when a stream ends. The app no
 #            longer crashes and now displays a "Stream has ended" message.
 #          - Instantiated VLC with --ignore-config and --no-osd flags to ensure
 #            a neutral video output, unaffected by local VLC settings.
-#   1.5.0: - Implemented colored usernames in the chat box. Usernames are now
-#            displayed in blue to distinguish them from message text, improving
-#            readability.
+#   1.5.0: - Implemented colored usernames in the chat box.
 #   1.4.0: - Added a volume control slider to the GUI.
 #   1.3.0: - Enhanced channel input field to accept both plain channel names
 #            and full Twitch URLs.
@@ -195,11 +196,15 @@ def run_app():
             self.irc_thread = None
             self.message_queue = queue.Queue()
 
-            # --- NEW: Define color schemes for chat ---
-            self.light_mode_colors = {'bg': 'white', 'fg': 'black', 'system_fg': 'gray'}
-            self.dark_mode_colors = {'bg': '#2E2E2E', 'fg': '#CCCCCC', 'system_fg': '#888888'}
+            # --- Define color schemes and UI state variables ---
+            self.light_mode_colors = {
+                'bg': 'white', 'fg': 'black', 'system_fg': 'gray', 'timestamp_fg': '#228B22'
+            }
+            self.dark_mode_colors = {
+                'bg': '#2E2E2E', 'fg': '#CCCCCC', 'system_fg': '#888888', 'timestamp_fg': '#8FBC8F'
+            }
             self.dark_mode_var = tk.BooleanVar(value=False)
-            # --- END NEW ---
+            self.timestamps_var = tk.BooleanVar(value=False)
 
             self.create_widgets()
             self.poll_message_queue()
@@ -256,15 +261,17 @@ def run_app():
             )
             self.volume_slider.pack(side=tk.LEFT, padx=(10, 0))
 
-            # --- NEW: Dark mode checkbox ---
+            # --- UI Toggles ---
             self.dark_mode_toggle = tk.Checkbutton(
-                control_frame,
-                text="Dark Mode",
-                variable=self.dark_mode_var,
-                command=self.toggle_dark_mode
+                control_frame, text="Dark Mode", variable=self.dark_mode_var, command=self.toggle_dark_mode
             )
             self.dark_mode_toggle.pack(side=tk.LEFT, padx=(15, 0))
-            # --- END NEW ---
+
+            self.timestamps_toggle = tk.Checkbutton(
+                control_frame, text="Show Timestamps", variable=self.timestamps_var
+            )
+            self.timestamps_toggle.pack(side=tk.LEFT, padx=(5, 0))
+            # --- End UI Toggles ---
 
             main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
             main_pane.pack(fill=tk.BOTH, expand=True)
@@ -289,8 +296,8 @@ def run_app():
 
             self.chat_box.tag_configure('username_color', foreground="#3465A4")
             self.chat_box.tag_configure('system_message', foreground=self.light_mode_colors['system_fg'])
+            self.chat_box.tag_configure('timestamp_color', foreground=self.light_mode_colors['timestamp_fg'])
 
-        # --- NEW: Method to toggle dark mode ---
         def toggle_dark_mode(self):
             """Switches the chat box color scheme between light and dark."""
             is_dark = self.dark_mode_var.get()
@@ -299,7 +306,7 @@ def run_app():
             print(f"INFO: Toggling chat theme to {'Dark' if is_dark else 'Light'} Mode.")
             self.chat_box.config(background=colors['bg'], foreground=colors['fg'])
             self.chat_box.tag_configure('system_message', foreground=colors['system_fg'])
-        # --- END NEW ---
+            self.chat_box.tag_configure('timestamp_color', foreground=colors['timestamp_fg'])
 
         def set_volume(self, volume_level):
             """Callback function for the volume slider."""
@@ -411,8 +418,15 @@ def run_app():
                 self.root.after(100, self.poll_message_queue)
 
         def add_message_to_chat(self, message):
-            """Appends a message to the chat box, coloring it, and scrolls down."""
+            """Appends a message to the chat box, with optional timestamp, and scrolls."""
             self.chat_box.config(state=tk.NORMAL)
+
+            # --- NEW: Prepend timestamp if enabled ---
+            if self.timestamps_var.get():
+                timestamp_str = f"[{time.strftime('%H:%M:%S')}] "
+                self.chat_box.insert(tk.END, timestamp_str, 'timestamp_color')
+            # --- END NEW ---
+
             try:
                 if message.startswith("System:"):
                     self.chat_box.insert(tk.END, message + "\n", 'system_message')
