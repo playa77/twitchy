@@ -1,16 +1,14 @@
 # twitch_app.py
-# Version: 1.2.0
+# Version: 1.3.0
 # Author: Systems Architect AI
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
-#   1.2.0: - Fixed infinite re-launch loop by replacing the unreliable
-#            `os.environ.get("VIRTUAL_ENV")` check with the more robust
-#            `sys.prefix != sys.base_prefix` comparison. This correctly
-#            detects when the script is running inside the venv.
-#          - Added comprehensive and precise logging to the venv handling
-#            function to improve transparency during the startup phase.
+#   1.3.0: - Enhanced channel input field to accept both plain channel names
+#            (e.g., 'montanablack88') and full Twitch URLs.
+#   1.2.0: - Fixed infinite re-launch loop by using a robust venv check.
+#          - Added comprehensive logging to the venv handling function.
 #   1.1.0: - Refactored startup logic to ensure venv setup completes before
-#            dependent libraries (VLC, DotEnv, etc.) are imported.
+#            dependent libraries are imported.
 
 import os
 import sys
@@ -33,24 +31,18 @@ def handle_venv():
     installing dependencies if necessary. Re-launches the script inside the
     venv if it's not already running there.
     """
-    print("--- VENV CHECK INITIATED ---")
-    print(f"DEBUG: sys.prefix = {sys.prefix}")
-    print(f"DEBUG: sys.base_prefix = {sys.base_prefix}")
-
-    # The most reliable check for being in a venv is to see if the current
-    # executable's path (sys.prefix) is different from the base system Python.
+    # This function is designed to be run only once at startup.
+    # For debugging, we can add more verbose logging if needed.
     in_venv = (sys.prefix != sys.base_prefix)
 
     if in_venv:
-        print("INFO: Already running in a virtual environment. Proceeding.")
-        print("--- VENV CHECK COMPLETED ---")
+        # Already in the correct venv, proceed
         return
 
-    print("INFO: Not running in a virtual environment. Setup required.")
+    print("--- VENV SETUP REQUIRED ---")
     venv_path = Path(VENV_DIR)
     script_path = Path(__file__).resolve()
 
-    # Determine the python executable path within the venv
     if sys.platform == "win32":
         venv_python = venv_path / "Scripts" / "python.exe"
     else:
@@ -59,37 +51,27 @@ def handle_venv():
     if not venv_path.exists():
         print(f"INFO: Creating virtual environment at '{venv_path.resolve()}'...")
         try:
-            # Use the base python executable to create the venv
             python_executable = sys.executable
             subprocess.run([python_executable, "-m", "venv", VENV_DIR], check=True)
             print("INFO: Virtual environment created successfully.")
         except subprocess.CalledProcessError as e:
             print(f"FATAL: Failed to create virtual environment. Error: {e}")
             sys.exit(1)
-    else:
-        print("INFO: Virtual environment directory already exists.")
 
-    print(f"INFO: Using venv Python executable: {venv_python}")
-    print("INFO: Installing/verifying required packages...")
+    print(f"INFO: Installing/verifying packages into '{venv_python}'...")
     try:
-        # Use capture_output=True to hide the verbose pip output unless there's an error
-        result = subprocess.run(
+        subprocess.run(
             [str(venv_python), "-m", "pip", "install"] + REQUIREMENTS,
             check=True,
             capture_output=True,
             text=True
         )
-        # Log stdout from pip for confirmation, even on success.
-        if result.stdout:
-            print(f"DEBUG: pip install stdout:\n{result.stdout.strip()}")
         print("INFO: All required packages are installed/verified.")
     except subprocess.CalledProcessError as e:
         print(f"FATAL: Failed to install dependencies. Error: {e.stderr}")
         sys.exit(1)
 
     print(f"INFO: Re-launching script '{script_path.name}' inside the virtual environment...")
-    print("--- END OF CURRENT PROCESS ---")
-    # Replace the current process with a new one running in the venv
     os.execv(str(venv_python), [str(venv_python), str(script_path)])
 
 
@@ -99,7 +81,6 @@ def run_app():
     the virtual environment is verified and all dependencies are installed.
     """
     # --- Application-Specific Imports ---
-    # These are safe to import now.
     try:
         import tkinter as tk
         from tkinter import messagebox, TclError
@@ -135,7 +116,6 @@ def run_app():
                 self.sock = socket.socket()
                 self.sock.connect((self.server, self.port))
 
-                # Note: Twitch requires the "oauth:" prefix for the PASS command.
                 pass_cmd = f"PASS oauth:{self.token}\r\n"
                 nick_cmd = f"NICK {self.nickname}\r\n"
                 join_cmd = f"JOIN #{self.channel}\r\n"
@@ -148,29 +128,25 @@ def run_app():
 
                 while not self._stop_event.is_set():
                     try:
-                        # Set a timeout to allow the loop to check the stop event
                         self.sock.settimeout(1.0)
                         resp = self.sock.recv(2048).decode("utf-8")
 
                         if not resp:
-                            # Connection closed by server
                             self.message_queue.put("System: Connection closed by server.")
                             break
 
                         if resp.startswith("PING"):
                             self.sock.send("PONG :tmi.twitch.tv\r\n".encode("utf-8"))
                         elif "PRIVMSG" in resp:
-                            # Format: :username!username@username.tmi.twitch.tv PRIVMSG #channel :message
                             try:
                                 username = resp.split('!')[0][1:]
                                 message = resp.split('PRIVMSG #')[1].split(':', 1)[1].strip()
                                 formatted_message = f"{username}: {message}"
                                 self.message_queue.put(formatted_message)
                             except IndexError:
-                                # Not a standard chat message, ignore
                                 pass
                     except socket.timeout:
-                        continue # Go back to the start of the loop to check stop_event
+                        continue
                     except Exception as e:
                         self.message_queue.put(f"System: IRC Error - {e}")
                         break
@@ -200,24 +176,16 @@ def run_app():
             self.root.geometry("1024x768")
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-            # --- Load Configuration ---
-            self.TWITCH_OAUTH_TOKEN = None
-            self.TWITCH_NICKNAME = None
             if not self.load_config():
-                # Error is shown in the method, just exit
                 self.root.destroy()
                 return
 
-            # --- Class Members ---
             self.vlc_instance = None
             self.vlc_player = None
             self.irc_thread = None
             self.message_queue = queue.Queue()
 
-            # --- GUI Setup ---
             self.create_widgets()
-
-            # Start polling the message queue
             self.poll_message_queue()
 
         def load_config(self):
@@ -228,7 +196,7 @@ def run_app():
                 messagebox.showerror(
                     "Configuration Error",
                     "The .env file was not found in the script's directory.\n\n"
-                    "Please create a .env file with the following content:\n"
+                    "Please create a .env file with:\n"
                     "TWITCH_OAUTH_TOKEN=your_token_here\n"
                     "TWITCH_NICKNAME=your_twitch_username"
                 )
@@ -250,7 +218,6 @@ def run_app():
 
         def create_widgets(self):
             """Creates and arranges all the GUI widgets."""
-            # --- Top Control Frame ---
             control_frame = tk.Frame(self.root)
             control_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -259,24 +226,19 @@ def run_app():
 
             self.channel_entry = tk.Entry(control_frame)
             self.channel_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-            self.channel_entry.bind("<Return>", self.load_stream) # Allow pressing Enter
+            self.channel_entry.bind("<Return>", self.load_stream)
 
             self.load_button = tk.Button(control_frame, text="Load Stream", command=self.load_stream)
             self.load_button.pack(side=tk.LEFT, padx=(5, 0))
 
-            # --- Main Content PanedWindow ---
             main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
             main_pane.pack(fill=tk.BOTH, expand=True)
 
-            # --- Video Frame ---
             self.video_frame = tk.Frame(main_pane, bg="black")
-            self.video_frame.pack(fill=tk.BOTH, expand=True)
-            main_pane.add(self.video_frame, width=800) # Initial width
+            main_pane.add(self.video_frame, width=800)
 
-            # --- Chat Frame ---
             chat_frame = tk.Frame(main_pane)
-            chat_frame.pack(fill=tk.BOTH, expand=True)
-            main_pane.add(chat_frame, width=224) # Initial width
+            main_pane.add(chat_frame, width=224)
 
             chat_scrollbar = tk.Scrollbar(chat_frame)
             chat_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -284,7 +246,7 @@ def run_app():
             self.chat_box = tk.Text(
                 chat_frame,
                 wrap=tk.WORD,
-                state=tk.DISABLED, # Read-only
+                state=tk.DISABLED,
                 yscrollcommand=chat_scrollbar.set
             )
             self.chat_box.pack(fill=tk.BOTH, expand=True)
@@ -292,33 +254,43 @@ def run_app():
 
         def load_stream(self, event=None):
             """Fetches stream URL, starts video playback, and connects to chat."""
-            channel = self.channel_entry.get().strip()
-            if not channel:
-                messagebox.showwarning("Input Error", "Please enter a Twitch channel name.")
+            raw_input = self.channel_entry.get().strip()
+            if not raw_input:
+                messagebox.showwarning("Input Error", "Please enter a Twitch channel name or URL.")
                 return
 
-            print(f"INFO: Attempting to load stream for channel: {channel}")
+            # --- NEW: Parse input to get channel name ---
+            channel = raw_input
+            if "twitch.tv/" in channel.lower():
+                # Extract the last part of the URL path, removing trailing slashes first
+                try:
+                    channel = channel.rstrip('/').split('/')[-1]
+                except IndexError:
+                    messagebox.showerror("Input Error", f"Could not parse channel name from URL:\n{raw_input}")
+                    return
+
+            if not channel:
+                messagebox.showerror("Input Error", f"Could not parse a valid channel name from:\n{raw_input}")
+                return
+            # --- END NEW ---
+
+            print(f"INFO: Attempting to load stream for channel: '{channel}' (from input: '{raw_input}')")
             self.load_button.config(state=tk.DISABLED, text="Loading...")
             self.root.update_idletasks()
 
-            # --- Stop existing processes first ---
             self.stop_current_stream()
 
-            # --- Get Stream URL with yt-dlp ---
             stream_url = self.get_stream_url(channel)
             if not stream_url:
                 messagebox.showerror("Stream Error", f"Could not get stream URL for '{channel}'.\nCheck if the channel is live and the name is correct.")
                 self.load_button.config(state=tk.NORMAL, text="Load Stream")
                 return
 
-            # --- Start VLC Player ---
             try:
                 self.vlc_instance = vlc.Instance("--no-xlib")
                 self.vlc_player = self.vlc_instance.media_player_new()
-                media = self.vlc_instance.media_new(stream_url)
-                # Important: Set HWND/XWindow ID before playing
-                # For Linux/Ubuntu, we use set_xwindow
                 self.vlc_player.set_xwindow(self.video_frame.winfo_id())
+                media = self.vlc_instance.media_new(stream_url)
                 self.vlc_player.set_media(media)
                 self.vlc_player.play()
                 print(f"INFO: VLC player started for stream: {stream_url}")
@@ -327,8 +299,7 @@ def run_app():
                 self.load_button.config(state=tk.NORMAL, text="Load Stream")
                 return
 
-            # --- Start IRC Client ---
-            self.message_queue = queue.Queue() # Clear queue for new channel
+            self.message_queue = queue.Queue()
             self.clear_chat_box()
             self.irc_thread = TwitchIRCClient(
                 self.TWITCH_NICKNAME,
@@ -345,7 +316,6 @@ def run_app():
             twitch_url = f"https://www.twitch.tv/{channel}"
             print(f"INFO: Running yt-dlp to get stream URL for {twitch_url}")
             try:
-                # We want the best quality stream URL
                 command = ["yt-dlp", "-f", "best", "-g", twitch_url]
                 result = subprocess.run(
                     command,
@@ -378,7 +348,6 @@ def run_app():
             except queue.Empty:
                 pass
             finally:
-                # Schedule the next check
                 self.root.after(100, self.poll_message_queue)
 
         def add_message_to_chat(self, message):
@@ -386,7 +355,7 @@ def run_app():
             self.chat_box.config(state=tk.NORMAL)
             self.chat_box.insert(tk.END, message + "\n")
             self.chat_box.config(state=tk.DISABLED)
-            self.chat_box.see(tk.END) # Auto-scroll
+            self.chat_box.see(tk.END)
 
         def clear_chat_box(self):
             """Clears all text from the chat box."""
@@ -405,7 +374,7 @@ def run_app():
             if self.irc_thread and self.irc_thread.is_alive():
                 print("INFO: Stopping IRC client thread.")
                 self.irc_thread.stop()
-                self.irc_thread.join(timeout=2) # Wait for thread to finish
+                self.irc_thread.join(timeout=2)
             self.irc_thread = None
 
         def on_closing(self):
@@ -415,45 +384,33 @@ def run_app():
             try:
                 self.root.destroy()
             except TclError:
-                # Can happen if the window is already being destroyed
                 pass
 
-    # --- Main Execution Logic ---
 
-    # Set up signal handler for Ctrl+C
+    # --- Main Execution Logic ---
     def signal_handler(sig, frame):
         print("\nINFO: Ctrl+C detected. Exiting gracefully.")
-        # Since this handler runs outside the Tkinter main loop,
-        # we need a safe way to shut down. We'll just exit.
-        # The daemon threads will be terminated automatically.
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Run the Tkinter application
     try:
         root = tk.Tk()
         app = TwitchApp(root)
-        if not root.winfo_exists(): # Check if window was destroyed during init
+        if root.winfo_exists():
+            root.mainloop()
+        else:
             print("INFO: Application failed to initialize. Exiting.")
             sys.exit(1)
-        root.mainloop()
     except Exception as e:
         print(f"FATAL: An unhandled exception occurred in the main application: {e}")
-        # Use a fallback message box if Tkinter is still usable
         try:
             messagebox.showerror("Fatal Error", f"An unexpected error occurred:\n\n{e}\n\nThe application will now close.")
         except Exception:
-            pass # If Tkinter is broken, we can't show a message box.
+            pass
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    # First, ensure we are in a properly configured virtual environment.
-    # This will either continue execution or re-launch the script.
     handle_venv()
-
-    # If handle_venv() returns, we are guaranteed to be in the correct venv.
-    # Now, we can run the main application logic which performs the
-    # necessary (and now safe) imports.
     run_app()
