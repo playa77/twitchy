@@ -1,8 +1,12 @@
 # twitch_app.py
-# Version: 1.5.0
+# Version: 1.6.0
 # Author: Systems Architect AI
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
+#   1.6.0: - Implemented graceful handling for when a stream ends. The app no
+#            longer crashes and now displays a "Stream has ended" message.
+#          - Instantiated VLC with --ignore-config and --no-osd flags to ensure
+#            a neutral video output, unaffected by local VLC settings.
 #   1.5.0: - Implemented colored usernames in the chat box. Usernames are now
 #            displayed in blue to distinguish them from message text, improving
 #            readability.
@@ -65,8 +69,15 @@ def handle_venv():
         )
         print("INFO: All required packages are installed/verified.")
     except subprocess.CalledProcessError as e:
-        print(f"FATAL: Failed to install dependencies. Error: {e.stderr}")
+        stderr_lower = e.stderr.lower()
+        if "failed to establish a new connection" in stderr_lower or "temporary failure in name resolution" in stderr_lower:
+             print("FATAL: A network error occurred while installing dependencies.")
+             print("       Could not connect to the Python Package Index (PyPI) to download packages.")
+             print("       Please check your internet connection, DNS settings, and firewall configuration.")
+        else:
+            print(f"FATAL: Failed to install dependencies. Error: {e.stderr}")
         sys.exit(1)
+
 
     print(f"INFO: Re-launching script '{script_path.name}' inside the virtual environment...")
     os.execv(str(venv_python), [str(venv_python), str(script_path)])
@@ -178,6 +189,7 @@ def run_app():
 
             self.vlc_instance = None
             self.vlc_player = None
+            self.vlc_event_manager = None
             self.irc_thread = None
             self.message_queue = queue.Queue()
 
@@ -255,10 +267,9 @@ def run_app():
             self.chat_box.pack(fill=tk.BOTH, expand=True)
             chat_scrollbar.config(command=self.chat_box.yview)
 
-            # --- NEW: Define a tag for coloring usernames ---
-            # Using a standard, readable blue color.
             self.chat_box.tag_configure('username_color', foreground="#3465A4")
-            # --- END NEW ---
+            self.chat_box.tag_configure('system_message', foreground="gray")
+
 
         def set_volume(self, volume_level):
             """Callback function for the volume slider."""
@@ -300,9 +311,18 @@ def run_app():
                 return
 
             try:
-                self.vlc_instance = vlc.Instance("--no-xlib")
+                # --- MODIFIED: Instantiate VLC with flags for neutral output ---
+                self.vlc_instance = vlc.Instance("--ignore-config", "--no-osd")
                 self.vlc_player = self.vlc_instance.media_player_new()
                 self.vlc_player.set_xwindow(self.video_frame.winfo_id())
+
+                # --- NEW: Set up event manager to handle stream end ---
+                self.vlc_event_manager = self.vlc_player.event_manager()
+                self.vlc_event_manager.event_attach(
+                    vlc.EventType.MediaPlayerEndReached,
+                    self.handle_stream_end
+                )
+
                 media = self.vlc_instance.media_new(stream_url)
                 self.vlc_player.set_media(media)
                 self.vlc_player.play()
@@ -362,27 +382,25 @@ def run_app():
             finally:
                 self.root.after(100, self.poll_message_queue)
 
-        def add_message_to_chat(self, message):
-            """Appends a message to the chat box, coloring the username, and scrolls down."""
+        def add_message_to_chat(self, message, tags=None):
+            """Appends a message to the chat box, coloring it, and scrolls down."""
             self.chat_box.config(state=tk.NORMAL)
-
             try:
-                # Find the separator between username and message
-                separator_index = message.index(': ')
-                username_part = message[:separator_index + 1]  # Include the colon and space
-                message_part = message[separator_index + 2:]   # The rest of the message
-
-                # Insert the username with the 'username_color' tag
-                self.chat_box.insert(tk.END, username_part, 'username_color')
-                # Insert the rest of the message and the newline without a tag
-                self.chat_box.insert(tk.END, message_part + "\n")
-
+                if message.startswith("System:"):
+                    self.chat_box.insert(tk.END, message + "\n", 'system_message')
+                elif ': ' in message:
+                    separator_index = message.index(': ')
+                    username_part = message[:separator_index + 1]
+                    message_part = message[separator_index + 1:]
+                    self.chat_box.insert(tk.END, username_part, 'username_color')
+                    self.chat_box.insert(tk.END, message_part + "\n")
+                else:
+                    self.chat_box.insert(tk.END, message + "\n")
             except ValueError:
-                # If ": " is not found (e.g., for system messages), insert the whole message normally.
                 self.chat_box.insert(tk.END, message + "\n")
 
             self.chat_box.config(state=tk.DISABLED)
-            self.chat_box.see(tk.END) # Auto-scroll
+            self.chat_box.see(tk.END)
 
         def clear_chat_box(self):
             """Clears all text from the chat box."""
@@ -392,6 +410,11 @@ def run_app():
 
         def stop_current_stream(self):
             """Stops the VLC player and the IRC client thread if they are running."""
+            if self.vlc_event_manager:
+                # Detach listener to prevent it from firing during manual cleanup
+                self.vlc_event_manager.event_detach(vlc.EventType.MediaPlayerEndReached)
+                self.vlc_event_manager = None
+
             if self.vlc_player:
                 print("INFO: Stopping VLC player.")
                 self.vlc_player.stop()
@@ -404,6 +427,26 @@ def run_app():
                 self.irc_thread.stop()
                 self.irc_thread.join(timeout=2)
             self.irc_thread = None
+
+        def handle_stream_end(self, event):
+            """
+            VLC event handler for when the media ends.
+            This is called from a non-main thread, so it must not update the GUI
+            directly. It schedules the cleanup to run on the main thread.
+            """
+            print("INFO: VLC 'MediaPlayerEndReached' event triggered.")
+            # Safely schedule the GUI-related cleanup on the main thread
+            self.root.after(0, self.cleanup_after_stream_end)
+
+        def cleanup_after_stream_end(self):
+            """
+            Performs cleanup tasks on the main thread after a stream has ended.
+            """
+            print("INFO: Running cleanup routine after stream ended.")
+            self.add_message_to_chat("System: Stream has ended.")
+            self.stop_current_stream()
+            self.load_button.config(state=tk.NORMAL, text="Load Stream")
+
 
         def on_closing(self):
             """Handles the application closing event."""
