@@ -1,14 +1,15 @@
 # twitch_app.py
-# Version: 1.4.0
+# Version: 1.5.0
 # Author: Systems Architect AI
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
-#   1.4.0: - Added a volume control slider to the GUI. The slider is enabled
-#            when a stream is active and allows adjusting the volume from 0-100.
+#   1.5.0: - Implemented colored usernames in the chat box. Usernames are now
+#            displayed in blue to distinguish them from message text, improving
+#            readability.
+#   1.4.0: - Added a volume control slider to the GUI.
 #   1.3.0: - Enhanced channel input field to accept both plain channel names
 #            and full Twitch URLs.
 #   1.2.0: - Fixed infinite re-launch loop by using a robust venv check.
-#          - Added comprehensive logging to the venv handling function.
 #   1.1.0: - Refactored startup logic to ensure venv setup completes before
 #            dependent libraries are imported.
 
@@ -226,21 +227,14 @@ def run_app():
             self.load_button = tk.Button(control_frame, text="Load Stream", command=self.load_stream)
             self.load_button.pack(side=tk.LEFT, padx=(5, 0))
 
-            # --- NEW: Volume Slider ---
             self.volume_var = tk.IntVar(value=100)
             self.volume_slider = tk.Scale(
                 control_frame,
-                from_=0,
-                to=100,
-                orient=tk.HORIZONTAL,
-                variable=self.volume_var,
-                command=self.set_volume,
-                label="Volume",
-                length=150,
-                state=tk.DISABLED # Disabled until a stream is loaded
+                from_=0, to=100, orient=tk.HORIZONTAL,
+                variable=self.volume_var, command=self.set_volume,
+                label="Volume", length=150, state=tk.DISABLED
             )
             self.volume_slider.pack(side=tk.LEFT, padx=(10, 0))
-            # --- END NEW ---
 
             main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
             main_pane.pack(fill=tk.BOTH, expand=True)
@@ -255,23 +249,23 @@ def run_app():
             chat_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
             self.chat_box = tk.Text(
-                chat_frame,
-                wrap=tk.WORD,
-                state=tk.DISABLED,
+                chat_frame, wrap=tk.WORD, state=tk.DISABLED,
                 yscrollcommand=chat_scrollbar.set
             )
             self.chat_box.pack(fill=tk.BOTH, expand=True)
             chat_scrollbar.config(command=self.chat_box.yview)
 
+            # --- NEW: Define a tag for coloring usernames ---
+            # Using a standard, readable blue color.
+            self.chat_box.tag_configure('username_color', foreground="#3465A4")
+            # --- END NEW ---
+
         def set_volume(self, volume_level):
             """Callback function for the volume slider."""
             if self.vlc_player:
                 try:
-                    # The volume_level is a string from the Scale widget
-                    volume = int(volume_level)
-                    self.vlc_player.audio_set_volume(volume)
+                    self.vlc_player.audio_set_volume(int(volume_level))
                 except (ValueError, TclError):
-                    # Gracefully handle potential errors if the value is invalid
                     pass
 
         def load_stream(self, event=None):
@@ -312,10 +306,8 @@ def run_app():
                 media = self.vlc_instance.media_new(stream_url)
                 self.vlc_player.set_media(media)
                 self.vlc_player.play()
-                # --- NEW: Set initial volume and enable slider ---
                 self.set_volume(self.volume_var.get())
                 self.volume_slider.config(state=tk.NORMAL)
-                # --- END NEW ---
                 print(f"INFO: VLC player started for stream: {stream_url}")
             except Exception as e:
                 messagebox.showerror("VLC Error", f"Failed to start VLC player. Error: {e}\n\nEnsure VLC is installed on your system.")
@@ -371,11 +363,26 @@ def run_app():
                 self.root.after(100, self.poll_message_queue)
 
         def add_message_to_chat(self, message):
-            """Appends a message to the chat box and scrolls down."""
+            """Appends a message to the chat box, coloring the username, and scrolls down."""
             self.chat_box.config(state=tk.NORMAL)
-            self.chat_box.insert(tk.END, message + "\n")
+
+            try:
+                # Find the separator between username and message
+                separator_index = message.index(': ')
+                username_part = message[:separator_index + 1]  # Include the colon and space
+                message_part = message[separator_index + 2:]   # The rest of the message
+
+                # Insert the username with the 'username_color' tag
+                self.chat_box.insert(tk.END, username_part, 'username_color')
+                # Insert the rest of the message and the newline without a tag
+                self.chat_box.insert(tk.END, message_part + "\n")
+
+            except ValueError:
+                # If ": " is not found (e.g., for system messages), insert the whole message normally.
+                self.chat_box.insert(tk.END, message + "\n")
+
             self.chat_box.config(state=tk.DISABLED)
-            self.chat_box.see(tk.END)
+            self.chat_box.see(tk.END) # Auto-scroll
 
         def clear_chat_box(self):
             """Clears all text from the chat box."""
@@ -390,9 +397,7 @@ def run_app():
                 self.vlc_player.stop()
                 self.vlc_player = None
                 self.vlc_instance = None
-                # --- NEW: Disable volume slider when stream stops ---
                 self.volume_slider.config(state=tk.DISABLED)
-                # --- END NEW ---
 
             if self.irc_thread and self.irc_thread.is_alive():
                 print("INFO: Stopping IRC client thread.")
