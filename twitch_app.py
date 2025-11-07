@@ -1,10 +1,12 @@
 # twitch_app.py
-# Version: 1.3.0
+# Version: 1.4.0
 # Author: Systems Architect AI
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
+#   1.4.0: - Added a volume control slider to the GUI. The slider is enabled
+#            when a stream is active and allows adjusting the volume from 0-100.
 #   1.3.0: - Enhanced channel input field to accept both plain channel names
-#            (e.g., 'montanablack88') and full Twitch URLs.
+#            and full Twitch URLs.
 #   1.2.0: - Fixed infinite re-launch loop by using a robust venv check.
 #          - Added comprehensive logging to the venv handling function.
 #   1.1.0: - Refactored startup logic to ensure venv setup completes before
@@ -31,12 +33,8 @@ def handle_venv():
     installing dependencies if necessary. Re-launches the script inside the
     venv if it's not already running there.
     """
-    # This function is designed to be run only once at startup.
-    # For debugging, we can add more verbose logging if needed.
     in_venv = (sys.prefix != sys.base_prefix)
-
     if in_venv:
-        # Already in the correct venv, proceed
         return
 
     print("--- VENV SETUP REQUIRED ---")
@@ -62,9 +60,7 @@ def handle_venv():
     try:
         subprocess.run(
             [str(venv_python), "-m", "pip", "install"] + REQUIREMENTS,
-            check=True,
-            capture_output=True,
-            text=True
+            check=True, capture_output=True, text=True
         )
         print("INFO: All required packages are installed/verified.")
     except subprocess.CalledProcessError as e:
@@ -88,7 +84,6 @@ def run_app():
         from dotenv import load_dotenv
     except ImportError as e:
         print(f"FATAL: A required library could not be imported: {e}")
-        print("This should not happen if the venv setup was successful.")
         sys.exit(1)
 
 
@@ -231,6 +226,22 @@ def run_app():
             self.load_button = tk.Button(control_frame, text="Load Stream", command=self.load_stream)
             self.load_button.pack(side=tk.LEFT, padx=(5, 0))
 
+            # --- NEW: Volume Slider ---
+            self.volume_var = tk.IntVar(value=100)
+            self.volume_slider = tk.Scale(
+                control_frame,
+                from_=0,
+                to=100,
+                orient=tk.HORIZONTAL,
+                variable=self.volume_var,
+                command=self.set_volume,
+                label="Volume",
+                length=150,
+                state=tk.DISABLED # Disabled until a stream is loaded
+            )
+            self.volume_slider.pack(side=tk.LEFT, padx=(10, 0))
+            # --- END NEW ---
+
             main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
             main_pane.pack(fill=tk.BOTH, expand=True)
 
@@ -252,6 +263,17 @@ def run_app():
             self.chat_box.pack(fill=tk.BOTH, expand=True)
             chat_scrollbar.config(command=self.chat_box.yview)
 
+        def set_volume(self, volume_level):
+            """Callback function for the volume slider."""
+            if self.vlc_player:
+                try:
+                    # The volume_level is a string from the Scale widget
+                    volume = int(volume_level)
+                    self.vlc_player.audio_set_volume(volume)
+                except (ValueError, TclError):
+                    # Gracefully handle potential errors if the value is invalid
+                    pass
+
         def load_stream(self, event=None):
             """Fetches stream URL, starts video playback, and connects to chat."""
             raw_input = self.channel_entry.get().strip()
@@ -259,10 +281,8 @@ def run_app():
                 messagebox.showwarning("Input Error", "Please enter a Twitch channel name or URL.")
                 return
 
-            # --- NEW: Parse input to get channel name ---
             channel = raw_input
             if "twitch.tv/" in channel.lower():
-                # Extract the last part of the URL path, removing trailing slashes first
                 try:
                     channel = channel.rstrip('/').split('/')[-1]
                 except IndexError:
@@ -272,7 +292,6 @@ def run_app():
             if not channel:
                 messagebox.showerror("Input Error", f"Could not parse a valid channel name from:\n{raw_input}")
                 return
-            # --- END NEW ---
 
             print(f"INFO: Attempting to load stream for channel: '{channel}' (from input: '{raw_input}')")
             self.load_button.config(state=tk.DISABLED, text="Loading...")
@@ -293,6 +312,10 @@ def run_app():
                 media = self.vlc_instance.media_new(stream_url)
                 self.vlc_player.set_media(media)
                 self.vlc_player.play()
+                # --- NEW: Set initial volume and enable slider ---
+                self.set_volume(self.volume_var.get())
+                self.volume_slider.config(state=tk.NORMAL)
+                # --- END NEW ---
                 print(f"INFO: VLC player started for stream: {stream_url}")
             except Exception as e:
                 messagebox.showerror("VLC Error", f"Failed to start VLC player. Error: {e}\n\nEnsure VLC is installed on your system.")
@@ -319,10 +342,7 @@ def run_app():
                 command = ["yt-dlp", "-f", "best", "-g", twitch_url]
                 result = subprocess.run(
                     command,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=15
+                    capture_output=True, text=True, check=True, timeout=15
                 )
                 stream_url = result.stdout.strip()
                 if not stream_url.startswith("http"):
@@ -370,6 +390,9 @@ def run_app():
                 self.vlc_player.stop()
                 self.vlc_player = None
                 self.vlc_instance = None
+                # --- NEW: Disable volume slider when stream stops ---
+                self.volume_slider.config(state=tk.DISABLED)
+                # --- END NEW ---
 
             if self.irc_thread and self.irc_thread.is_alive():
                 print("INFO: Stopping IRC client thread.")
