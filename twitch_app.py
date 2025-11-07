@@ -1,8 +1,10 @@
 # twitch_app.py
-# Version: 1.6.0
+# Version: 1.7.0
 # Author: Systems Architect AI
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
+#   1.7.0: - Added a dark mode toggle for the chat box. Usernames remain blue
+#            in both light and dark modes for consistent readability.
 #   1.6.0: - Implemented graceful handling for when a stream ends. The app no
 #            longer crashes and now displays a "Stream has ended" message.
 #          - Instantiated VLC with --ignore-config and --no-osd flags to ensure
@@ -193,6 +195,12 @@ def run_app():
             self.irc_thread = None
             self.message_queue = queue.Queue()
 
+            # --- NEW: Define color schemes for chat ---
+            self.light_mode_colors = {'bg': 'white', 'fg': 'black', 'system_fg': 'gray'}
+            self.dark_mode_colors = {'bg': '#2E2E2E', 'fg': '#CCCCCC', 'system_fg': '#888888'}
+            self.dark_mode_var = tk.BooleanVar(value=False)
+            # --- END NEW ---
+
             self.create_widgets()
             self.poll_message_queue()
 
@@ -248,6 +256,16 @@ def run_app():
             )
             self.volume_slider.pack(side=tk.LEFT, padx=(10, 0))
 
+            # --- NEW: Dark mode checkbox ---
+            self.dark_mode_toggle = tk.Checkbutton(
+                control_frame,
+                text="Dark Mode",
+                variable=self.dark_mode_var,
+                command=self.toggle_dark_mode
+            )
+            self.dark_mode_toggle.pack(side=tk.LEFT, padx=(15, 0))
+            # --- END NEW ---
+
             main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
             main_pane.pack(fill=tk.BOTH, expand=True)
 
@@ -262,14 +280,26 @@ def run_app():
 
             self.chat_box = tk.Text(
                 chat_frame, wrap=tk.WORD, state=tk.DISABLED,
-                yscrollcommand=chat_scrollbar.set
+                yscrollcommand=chat_scrollbar.set,
+                background=self.light_mode_colors['bg'],
+                foreground=self.light_mode_colors['fg']
             )
             self.chat_box.pack(fill=tk.BOTH, expand=True)
             chat_scrollbar.config(command=self.chat_box.yview)
 
             self.chat_box.tag_configure('username_color', foreground="#3465A4")
-            self.chat_box.tag_configure('system_message', foreground="gray")
+            self.chat_box.tag_configure('system_message', foreground=self.light_mode_colors['system_fg'])
 
+        # --- NEW: Method to toggle dark mode ---
+        def toggle_dark_mode(self):
+            """Switches the chat box color scheme between light and dark."""
+            is_dark = self.dark_mode_var.get()
+            colors = self.dark_mode_colors if is_dark else self.light_mode_colors
+
+            print(f"INFO: Toggling chat theme to {'Dark' if is_dark else 'Light'} Mode.")
+            self.chat_box.config(background=colors['bg'], foreground=colors['fg'])
+            self.chat_box.tag_configure('system_message', foreground=colors['system_fg'])
+        # --- END NEW ---
 
         def set_volume(self, volume_level):
             """Callback function for the volume slider."""
@@ -311,12 +341,10 @@ def run_app():
                 return
 
             try:
-                # --- MODIFIED: Instantiate VLC with flags for neutral output ---
                 self.vlc_instance = vlc.Instance("--ignore-config", "--no-osd")
                 self.vlc_player = self.vlc_instance.media_player_new()
                 self.vlc_player.set_xwindow(self.video_frame.winfo_id())
 
-                # --- NEW: Set up event manager to handle stream end ---
                 self.vlc_event_manager = self.vlc_player.event_manager()
                 self.vlc_event_manager.event_attach(
                     vlc.EventType.MediaPlayerEndReached,
@@ -382,7 +410,7 @@ def run_app():
             finally:
                 self.root.after(100, self.poll_message_queue)
 
-        def add_message_to_chat(self, message, tags=None):
+        def add_message_to_chat(self, message):
             """Appends a message to the chat box, coloring it, and scrolls down."""
             self.chat_box.config(state=tk.NORMAL)
             try:
@@ -411,7 +439,6 @@ def run_app():
         def stop_current_stream(self):
             """Stops the VLC player and the IRC client thread if they are running."""
             if self.vlc_event_manager:
-                # Detach listener to prevent it from firing during manual cleanup
                 self.vlc_event_manager.event_detach(vlc.EventType.MediaPlayerEndReached)
                 self.vlc_event_manager = None
 
@@ -431,11 +458,9 @@ def run_app():
         def handle_stream_end(self, event):
             """
             VLC event handler for when the media ends.
-            This is called from a non-main thread, so it must not update the GUI
-            directly. It schedules the cleanup to run on the main thread.
+            Schedules cleanup to run on the main thread.
             """
             print("INFO: VLC 'MediaPlayerEndReached' event triggered.")
-            # Safely schedule the GUI-related cleanup on the main thread
             self.root.after(0, self.cleanup_after_stream_end)
 
         def cleanup_after_stream_end(self):
