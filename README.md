@@ -20,7 +20,7 @@ A lightweight, self-contained Twitch client for Ubuntu-based systems. This appli
 * A Twitch account with a valid OAuth token
 
 ## Setup
-1. Clone the repository or download the script.
+1. Clone the repository.
 2. Create a `.env` file in the script's directory with your Twitch OAuth token and nickname:
    ```
    TWITCH_OAUTH_TOKEN=your_token_here
