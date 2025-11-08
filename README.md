@@ -1,11 +1,11 @@
 # README.md
 ## Introduction
-A lightweight, self-contained Twitch client for Ubuntu-based systems. This application allows users to watch Twitch streams, participate in chat, and customize their viewing experience with features like dark mode, timestamps, and emote rendering.
+A lightweight, self-contained Twitch client for Ubuntu-based systems. This application allows users to watch Twitch streams, read chat, and customize their viewing experience with features like dark mode, timestamps, and emote rendering.
 
 ## Features
 
 * Watch live Twitch streams
-* Participate in chat with real-time message updates
+* Read chat with real-time message updates
 * Customize the application with dark mode, timestamp display, and emote rendering
 * Support for optional local emote rendering from the `/emotes` subfolder
 * Fullscreen toggle with the <Escape> key
