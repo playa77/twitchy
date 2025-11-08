@@ -1,8 +1,12 @@
 # twitch_app.py
-# Version: 1.10.0
+# Version: 1.11.0
 # Author: Systems Architect AI
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
+#   1.11.0: - Added optional local emote rendering from /emotes subfolder.
+#           - Emotes can be toggled on/off via a "Show Emotes" checkbox.
+#           - Emote mappings loaded from emotes.json file.
+#           - Emotes are displayed inline with chat messages using Tkinter PhotoImage.
 #   1.10.0: - Reworked fullscreen toggle to make the video player truly fullscreen
 #             by hiding other UI elements, correcting the previous "maximize" behavior.
 #   1.9.0:  - Implemented a fullscreen toggle, bound to the <Escape> key.
@@ -24,13 +28,15 @@ import subprocess
 import threading
 import queue
 import time
+import json
+import re
 from pathlib import Path
 import signal
 
 # --- Virtual Environment and Dependency Management ---
 
 VENV_DIR = ".venv"
-REQUIREMENTS = ["python-vlc", "python-dotenv", "yt-dlp"]
+REQUIREMENTS = ["python-vlc", "python-dotenv", "yt-dlp", "Pillow"]
 
 def handle_venv():
     """
@@ -94,6 +100,7 @@ def run_app():
         from tkinter import messagebox, TclError
         import vlc
         from dotenv import load_dotenv
+        from PIL import Image, ImageTk
     except ImportError as e:
         print(f"FATAL: A required library could not be imported: {e}")
         sys.exit(1)
@@ -144,13 +151,14 @@ def run_app():
 
                         if resp.startswith("PING"):
                             self.sock.send("PONG :tmi.twitch.tv\r\n".encode("utf-8"))
-                        elif "PRIVMSG" in resp:
+                        elif "PRIVMSG" in resp and f"PRIVMSG #{self.channel}" in resp:
                             try:
+                                # Only process actual chat messages for our channel
                                 username = resp.split('!')[0][1:]
-                                message = resp.split('PRIVMSG #')[1].split(':', 1)[1].strip()
+                                message = resp.split(f'PRIVMSG #{self.channel}')[1].split(':', 1)[1].strip()
                                 formatted_message = f"{username}: {message}"
                                 self.message_queue.put(formatted_message)
-                            except IndexError:
+                            except (IndexError, ValueError):
                                 pass
                     except socket.timeout:
                         continue
@@ -195,6 +203,11 @@ def run_app():
             self.message_queue = queue.Queue()
             self.is_fullscreen = False
 
+            # --- Emote System ---
+            self.emote_dict = {}
+            self.emote_images = {}
+            self.load_emotes()
+
             # --- Define color schemes and UI state variables ---
             self.light_mode_colors = {
                 'bg': 'white', 'fg': 'black', 'system_fg': 'gray', 'timestamp_fg': '#228B22'
@@ -204,9 +217,42 @@ def run_app():
             }
             self.dark_mode_var = tk.BooleanVar(value=False)
             self.timestamps_var = tk.BooleanVar(value=False)
+            self.emotes_var = tk.BooleanVar(value=True)
 
             self.create_widgets()
             self.poll_message_queue()
+
+        def load_emotes(self):
+            """Loads emote mappings from emotes.json and prepares image cache."""
+            emotes_json_path = Path("emotes.json")
+            if not emotes_json_path.is_file():
+                print("WARNING: emotes.json not found. Emote rendering will be disabled.")
+                return
+
+            try:
+                with open(emotes_json_path, 'r', encoding='utf-8') as f:
+                    self.emote_dict = json.load(f)
+                print(f"INFO: Loaded {len(self.emote_dict)} emote mappings from emotes.json")
+            except Exception as e:
+                print(f"WARNING: Failed to load emotes.json: {e}")
+                return
+
+            # Pre-load and cache emote images
+            for emote_name, emote_path in self.emote_dict.items():
+                full_path = Path(emote_path)
+                if full_path.is_file():
+                    try:
+                        # Load and resize emote to reasonable chat size
+                        img = Image.open(full_path)
+                        img = img.resize((28, 28), Image.Resampling.LANCZOS)
+                        photo = ImageTk.PhotoImage(img)
+                        self.emote_images[emote_name] = photo
+                    except Exception as e:
+                        print(f"WARNING: Failed to load emote {emote_name} from {emote_path}: {e}")
+                else:
+                    print(f"WARNING: Emote file not found: {emote_path}")
+
+            print(f"INFO: Successfully cached {len(self.emote_images)} emote images")
 
         def load_config(self):
             """Loads configuration from .env file."""
@@ -260,18 +306,27 @@ def run_app():
             )
             self.volume_slider.pack(side=tk.LEFT, padx=(10, 0))
 
+            # Second row for checkboxes
+            self.options_frame = tk.Frame(self.root)
+            self.options_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+
             self.dark_mode_toggle = tk.Checkbutton(
-                self.control_frame, text="Dark Mode", variable=self.dark_mode_var, command=self.toggle_dark_mode
+                self.options_frame, text="Dark Mode", variable=self.dark_mode_var, command=self.toggle_dark_mode
             )
-            self.dark_mode_toggle.pack(side=tk.LEFT, padx=(15, 0))
+            self.dark_mode_toggle.pack(side=tk.LEFT, padx=(0, 5))
 
             self.timestamps_toggle = tk.Checkbutton(
-                self.control_frame, text="Show Timestamps", variable=self.timestamps_var
+                self.options_frame, text="Show Timestamps", variable=self.timestamps_var
             )
-            self.timestamps_toggle.pack(side=tk.LEFT, padx=(5, 0))
+            self.timestamps_toggle.pack(side=tk.LEFT, padx=(0, 5))
 
-            fullscreen_label = tk.Label(self.control_frame, text="(ESC to toggle fullscreen)", fg="grey")
-            fullscreen_label.pack(side=tk.RIGHT, padx=(10, 5))
+            self.emotes_toggle = tk.Checkbutton(
+                self.options_frame, text="Show Emotes", variable=self.emotes_var
+            )
+            self.emotes_toggle.pack(side=tk.LEFT, padx=(0, 5))
+
+            fullscreen_label = tk.Label(self.options_frame, text="(ESC to toggle fullscreen)", fg="grey")
+            fullscreen_label.pack(side=tk.RIGHT, padx=(10, 0))
 
             self.main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
             self.main_pane.pack(fill=tk.BOTH, expand=True)
@@ -306,11 +361,13 @@ def run_app():
             if self.is_fullscreen:
                 # Entering fullscreen: hide controls and chat
                 self.control_frame.pack_forget()
+                self.options_frame.pack_forget()
                 self.main_pane.forget(self.chat_frame)
                 print("INFO: Video fullscreen enabled.")
             else:
                 # Exiting fullscreen: restore controls and chat
                 self.control_frame.pack(fill=tk.X, padx=5, pady=5, before=self.main_pane)
+                self.options_frame.pack(fill=tk.X, padx=5, pady=(0, 5), before=self.main_pane)
                 self.main_pane.add(self.chat_frame)
                 # Ensure sash is visible and positioned reasonably
                 try:
@@ -440,10 +497,47 @@ def run_app():
             finally:
                 self.root.after(100, self.poll_message_queue)
 
+        def parse_message_with_emotes(self, message_text):
+            """
+            Parses a message and returns a list of tuples: (type, content)
+            where type is either 'text' or 'emote', and content is the string or emote name.
+            """
+            if not self.emotes_var.get() or not self.emote_images:
+                return [('text', message_text)]
+
+            # Build regex pattern to match emote names
+            # Sort by length descending to match longer emotes first
+            emote_names = sorted(self.emote_images.keys(), key=len, reverse=True)
+            # Escape special regex characters in emote names
+            escaped_names = [re.escape(name) for name in emote_names]
+            pattern = '|'.join(escaped_names)
+            
+            if not pattern:
+                return [('text', message_text)]
+
+            result = []
+            last_end = 0
+            
+            for match in re.finditer(pattern, message_text):
+                # Add text before the emote
+                if match.start() > last_end:
+                    result.append(('text', message_text[last_end:match.start()]))
+                
+                # Add the emote
+                result.append(('emote', match.group()))
+                last_end = match.end()
+            
+            # Add remaining text after last emote
+            if last_end < len(message_text):
+                result.append(('text', message_text[last_end:]))
+            
+            return result if result else [('text', message_text)]
+
         def add_message_to_chat(self, message):
-            """Appends a message to the chat box, with optional timestamp, and scrolls."""
+            """Appends a message to the chat box, with optional timestamp and emotes, and scrolls."""
             self.chat_box.config(state=tk.NORMAL)
 
+            # Add timestamp if enabled
             if self.timestamps_var.get():
                 timestamp_str = f"[{time.strftime('%H:%M:%S')}] "
                 self.chat_box.insert(tk.END, timestamp_str, 'timestamp_color')
@@ -455,8 +549,19 @@ def run_app():
                     separator_index = message.index(': ')
                     username_part = message[:separator_index + 1]
                     message_part = message[separator_index + 1:]
+                    
+                    # Insert username
                     self.chat_box.insert(tk.END, username_part, 'username_color')
-                    self.chat_box.insert(tk.END, message_part + "\n")
+                    
+                    # Parse and insert message with emotes
+                    parsed = self.parse_message_with_emotes(message_part)
+                    for item_type, content in parsed:
+                        if item_type == 'text':
+                            self.chat_box.insert(tk.END, content)
+                        elif item_type == 'emote' and content in self.emote_images:
+                            self.chat_box.image_create(tk.END, image=self.emote_images[content])
+                    
+                    self.chat_box.insert(tk.END, "\n")
                 else:
                     self.chat_box.insert(tk.END, message + "\n")
             except ValueError:
