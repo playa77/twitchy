@@ -1,6 +1,6 @@
 # Minimalist Python Twitch Client
 
-A lean, no-nonsense Twitch client for Ubuntu that does exactly what you need and nothing more. Built for people who want a quality stream on their fourth monitor while actually getting work done.
+A lean, no-nonsense Twitch client for Ubuntu that does exactly what you need and nothing more. Built for people who want a quality stream on their third monitor while actually getting work done.
 
 ## Philosophy
 
