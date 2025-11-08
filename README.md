@@ -1,6 +1,6 @@
 # Minimalist Python Twitch Client
 
-A lean, no-nonsense Twitch client for Ubuntu that does exactly what you need and nothing more. Built for people who want a quality stream on their third monitor while actually getting work done.
+A lean, no-nonsense Twitch client for Ubuntu that does exactly what you need and nothing more. Built for people who want a quality stream on their fourth monitor while actually getting work done.
 
 ## Philosophy
 
@@ -31,33 +31,93 @@ Perfect for multitaskers who want Twitch ambient in the background without the d
 - **Ubuntu** (or any Debian-based Linux distribution)
 - **Python 3.8+**
 - **VLC Media Player**: `sudo apt install vlc`
+- **Twitch CLI** (for token generation)
 - **Internet connection** for initial setup
 
 ## Installation
 
-1. **Clone or download** this repository to your local machine
+### 1. Install VLC
 
-2. **Install VLC** (if not already installed):
-   ```bash
-   sudo apt install vlc
-   ```
-      
-# 3. **Get your Twitch OAuth token**:
-#    - Visit [https://twitchapps.com/tmi/](https://twitchapps.com/tmi/)
-#   - Connect with your Twitch account
-#   - Copy the OAuth token (starts with `oauth:` - you can include this prefix or omit it)
-# THIS DOES NOT WORK ANYMORE
+```bash
+sudo apt install vlc
+```
 
-4. **Create a `.env` file** in the same directory as `twitch_app.py`:
-   ```env
-   TWITCH_OAUTH_TOKEN=your_oauth_token_here
-   TWITCH_NICKNAME=your_twitch_username
-   ```
+### 2. Install Twitch CLI
 
-5. **Run the application**:
-   ```bash
-   python3 twitch_app.py
-   ```
+Download and install the official Twitch CLI:
+
+```bash
+# Download the latest release for Linux
+wget https://github.com/twitchdev/twitch-cli/releases/latest/download/twitch-cli_Linux_x86_64.tar.gz
+
+# Extract it
+tar -xzf twitch-cli_Linux_x86_64.tar.gz
+
+# Move to a directory in your PATH
+sudo mv twitch /usr/local/bin/
+
+# Verify installation
+twitch version
+```
+
+### 3. Configure Twitch CLI
+
+First, you need to register an application on Twitch:
+
+1. Go to the [Twitch Developer Console](https://dev.twitch.tv/console/apps)
+2. Click **"Register Your Application"**
+3. Fill in:
+   - **Name**: Whatever you want (e.g., "My Chat Client")
+   - **OAuth Redirect URLs**: `http://localhost:3000`
+   - **Category**: "Chat Bot"
+4. Click **"Create"**
+5. Click **"Manage"** and note your **Client ID**
+6. Click **"New Secret"** and note your **Client Secret**
+
+Now configure the CLI with your credentials:
+
+```bash
+twitch configure
+```
+
+When prompted, enter:
+- Your **Client ID**
+- Your **Client Secret**
+
+### 4. Generate Your OAuth Token
+
+Generate a user access token with chat permissions:
+
+```bash
+twitch token -u -s 'chat:read chat:edit'
+```
+
+This will:
+1. Open your browser to authorize the application
+2. Click **"Authorize"**
+3. Return to your terminal where the token will be displayed
+
+Copy the **User Access Token** from the output (not the refresh token).
+
+### 5. Create Your Configuration File
+
+Create a `.env` file in the same directory as `twitch_app.py`:
+
+```env
+TWITCH_OAUTH_TOKEN=your_access_token_here
+TWITCH_NICKNAME=your_twitch_username
+```
+
+**Important**: 
+- Use just the access token value itself
+- The app will automatically add the `oauth:` prefix when connecting to IRC
+- Your nickname should be your Twitch username (lowercase)
+
+### 6. Run the Application
+
+```bash
+python3 twitch_app.py
+```
 
 The first run will automatically:
 - Create a virtual environment (`.venv/`)
@@ -78,7 +138,7 @@ Subsequent runs will start instantly.
    - Volume slider for quick adjustments
 5. **Press ESC** to toggle fullscreen mode
 
-That's it. No account required (beyond the OAuth for chat), no tracking, no BS.
+That's it. No tracking, no BS.
 
 ## Optional: Custom Emotes
 
@@ -103,6 +163,23 @@ Want to see your favorite emotes in chat?
 - **Enter** (in channel field): Load stream
 - **ESC**: Toggle fullscreen video mode
 
+## Token Expiration & Refresh
+
+User access tokens expire after a few hours. When your chat stops connecting:
+
+```bash
+# Use the refresh token to get a new access token
+twitch token --refresh your_refresh_token_here
+```
+
+Or simply regenerate a fresh token:
+
+```bash
+twitch token -u -s 'chat:read chat:edit'
+```
+
+Update your `.env` file with the new token.
+
 ## Why This Exists
 
 Because sometimes you just want to watch a stream without:
@@ -112,13 +189,14 @@ Because sometimes you just want to watch a stream without:
 - Recommended channels you don't care about
 - Your browser's 47 other tabs slowing everything down
 
-This is for the focused multitasker. The person with code on rwo monitors and a stream on the third. The minimalist who respects their system resources.
+This is for the focused multitasker. The person with code on three monitors and a stream on the fourth. The minimalist who respects their system resources.
 
 ## Technical Notes
 
 - Built with Python's `tkinter` for minimal dependencies
 - Uses `python-vlc` bindings for video playback
 - Connects directly to Twitch IRC (no intermediary services)
+- Uses OAuth 2.0 user access tokens (modern standard)
 - `yt-dlp` handles stream URL resolution
 - Fully self-contained with automatic dependency management
 
@@ -138,10 +216,16 @@ This is for the focused multitasker. The person with code on rwo monitors and a 
 - Confirm VLC is installed: `vlc --version`
 - Try reinstalling: `sudo apt install --reinstall vlc`
 
-**Chat not connecting**
-- Verify your `.env` file has valid credentials
-- Ensure OAuth token is current (they can expire)
-- Check that username matches your Twitch account
+**Chat not connecting / "Login authentication failed"**
+- Your OAuth token may have expired—generate a new one
+- Verify your `.env` file has the correct token value
+- Ensure username matches your Twitch account exactly
+- The app adds `oauth:` prefix automatically—don't include it in `.env`
+
+**"Improperly formatted auth"**
+- Usually means the token format is wrong
+- Regenerate the token using `twitch token -u -s 'chat:read chat:edit'`
+- Make sure you copied the access token, not the refresh token
 
 ## License
 
