@@ -33,7 +33,7 @@ A lightweight, self-contained Twitch client for Ubuntu-based systems. This appli
 2. Click the "Load Stream" button to start the stream.
 3. Use the volume slider to adjust the volume.
 4. Toggle dark mode, timestamp display, and emote rendering using the checkboxes.
-5. Use the <Escape> key to toggle fullscreen mode.
+5. Use the Esc key to toggle fullscreen mode.
 6. Close the application by clicking the close button or pressing Ctrl+C.
 
 ## Troubleshooting
