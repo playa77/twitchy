@@ -41,11 +41,12 @@ Perfect for multitaskers who want Twitch ambient in the background without the d
    ```bash
    sudo apt install vlc
    ```
-
-3. **Get your Twitch OAuth token**:
-   - Visit [https://twitchapps.com/tmi/](https://twitchapps.com/tmi/)
-   - Connect with your Twitch account
-   - Copy the OAuth token (starts with `oauth:` - you can include this prefix or omit it)
+      
+# 3. **Get your Twitch OAuth token**:
+#    - Visit [https://twitchapps.com/tmi/](https://twitchapps.com/tmi/)
+#   - Connect with your Twitch account
+#   - Copy the OAuth token (starts with `oauth:` - you can include this prefix or omit it)
+# THIS DOES NOT WORK ANYMORE
 
 4. **Create a `.env` file** in the same directory as `twitch_app.py`:
    ```env
