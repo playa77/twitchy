@@ -111,7 +111,7 @@ Because sometimes you just want to watch a stream without:
 - Recommended channels you don't care about
 - Your browser's 47 other tabs slowing everything down
 
-This is for the focused multitasker. The person with code on three monitors and a stream on the fourth. The minimalist who respects their system resources.
+This is for the focused multitasker. The person with code on rwo monitors and a stream on the third. The minimalist who respects their system resources.
 
 ## Technical Notes
 
