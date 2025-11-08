@@ -1,24 +1,21 @@
 # twitch_app.py
-# Version: 1.8.0
+# Version: 1.10.0
 # Author: Systems Architect AI
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
-#   1.8.0: - Added optional, colored timestamps to the chat box, which can be
-#            toggled on/off via a checkbox. Timestamp color is adjusted for
-#            readability in both light and dark modes.
-#   1.7.0: - Added a dark mode toggle for the chat box. Usernames remain blue
-#            in both light and dark modes for consistent readability.
-#   1.6.0: - Implemented graceful handling for when a stream ends. The app no
-#            longer crashes and now displays a "Stream has ended" message.
-#          - Instantiated VLC with --ignore-config and --no-osd flags to ensure
-#            a neutral video output, unaffected by local VLC settings.
-#   1.5.0: - Implemented colored usernames in the chat box.
-#   1.4.0: - Added a volume control slider to the GUI.
-#   1.3.0: - Enhanced channel input field to accept both plain channel names
-#            and full Twitch URLs.
-#   1.2.0: - Fixed infinite re-launch loop by using a robust venv check.
-#   1.1.0: - Refactored startup logic to ensure venv setup completes before
-#            dependent libraries are imported.
+#   1.10.0: - Reworked fullscreen toggle to make the video player truly fullscreen
+#             by hiding other UI elements, correcting the previous "maximize" behavior.
+#   1.9.0:  - Implemented a fullscreen toggle, bound to the <Escape> key.
+#           - Added a label to the UI to inform users of the new keybinding.
+#   1.8.0:  - Added optional, colored timestamps to the chat box, which can be
+#             toggled on/off via a checkbox. Timestamp color is adjusted for
+#             readability in both light and dark modes.
+#   1.7.0:  - Added a dark mode toggle for the chat box. Usernames remain blue
+#             in both light and dark modes for consistent readability.
+#   1.6.0:  - Implemented graceful handling for when a stream ends. The app no
+#             longer crashes and now displays a "Stream has ended" message.
+#           - Instantiated VLC with --ignore-config and --no-osd flags to ensure
+#             a neutral video output, unaffected by local VLC settings.
 
 import os
 import sys
@@ -185,6 +182,7 @@ def run_app():
             self.root.title("Minimalist Python Twitch Client")
             self.root.geometry("1024x768")
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+            self.root.bind("<Escape>", self.toggle_fullscreen)
 
             if not self.load_config():
                 self.root.destroy()
@@ -195,6 +193,7 @@ def run_app():
             self.vlc_event_manager = None
             self.irc_thread = None
             self.message_queue = queue.Queue()
+            self.is_fullscreen = False
 
             # --- Define color schemes and UI state variables ---
             self.light_mode_colors = {
@@ -239,54 +238,55 @@ def run_app():
 
         def create_widgets(self):
             """Creates and arranges all the GUI widgets."""
-            control_frame = tk.Frame(self.root)
-            control_frame.pack(fill=tk.X, padx=5, pady=5)
+            self.control_frame = tk.Frame(self.root)
+            self.control_frame.pack(fill=tk.X, padx=5, pady=5)
 
-            channel_label = tk.Label(control_frame, text="Twitch Channel:")
+            channel_label = tk.Label(self.control_frame, text="Twitch Channel:")
             channel_label.pack(side=tk.LEFT, padx=(0, 5))
 
-            self.channel_entry = tk.Entry(control_frame)
+            self.channel_entry = tk.Entry(self.control_frame)
             self.channel_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self.channel_entry.bind("<Return>", self.load_stream)
 
-            self.load_button = tk.Button(control_frame, text="Load Stream", command=self.load_stream)
+            self.load_button = tk.Button(self.control_frame, text="Load Stream", command=self.load_stream)
             self.load_button.pack(side=tk.LEFT, padx=(5, 0))
 
             self.volume_var = tk.IntVar(value=100)
             self.volume_slider = tk.Scale(
-                control_frame,
+                self.control_frame,
                 from_=0, to=100, orient=tk.HORIZONTAL,
                 variable=self.volume_var, command=self.set_volume,
                 label="Volume", length=150, state=tk.DISABLED
             )
             self.volume_slider.pack(side=tk.LEFT, padx=(10, 0))
 
-            # --- UI Toggles ---
             self.dark_mode_toggle = tk.Checkbutton(
-                control_frame, text="Dark Mode", variable=self.dark_mode_var, command=self.toggle_dark_mode
+                self.control_frame, text="Dark Mode", variable=self.dark_mode_var, command=self.toggle_dark_mode
             )
             self.dark_mode_toggle.pack(side=tk.LEFT, padx=(15, 0))
 
             self.timestamps_toggle = tk.Checkbutton(
-                control_frame, text="Show Timestamps", variable=self.timestamps_var
+                self.control_frame, text="Show Timestamps", variable=self.timestamps_var
             )
             self.timestamps_toggle.pack(side=tk.LEFT, padx=(5, 0))
-            # --- End UI Toggles ---
 
-            main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
-            main_pane.pack(fill=tk.BOTH, expand=True)
+            fullscreen_label = tk.Label(self.control_frame, text="(ESC to toggle fullscreen)", fg="grey")
+            fullscreen_label.pack(side=tk.RIGHT, padx=(10, 5))
 
-            self.video_frame = tk.Frame(main_pane, bg="black")
-            main_pane.add(self.video_frame, width=800)
+            self.main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
+            self.main_pane.pack(fill=tk.BOTH, expand=True)
 
-            chat_frame = tk.Frame(main_pane)
-            main_pane.add(chat_frame, width=224)
+            self.video_frame = tk.Frame(self.main_pane, bg="black")
+            self.main_pane.add(self.video_frame, width=800)
 
-            chat_scrollbar = tk.Scrollbar(chat_frame)
+            self.chat_frame = tk.Frame(self.main_pane)
+            self.main_pane.add(self.chat_frame, width=224)
+
+            chat_scrollbar = tk.Scrollbar(self.chat_frame)
             chat_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
             self.chat_box = tk.Text(
-                chat_frame, wrap=tk.WORD, state=tk.DISABLED,
+                self.chat_frame, wrap=tk.WORD, state=tk.DISABLED,
                 yscrollcommand=chat_scrollbar.set,
                 background=self.light_mode_colors['bg'],
                 foreground=self.light_mode_colors['fg']
@@ -297,6 +297,29 @@ def run_app():
             self.chat_box.tag_configure('username_color', foreground="#3465A4")
             self.chat_box.tag_configure('system_message', foreground=self.light_mode_colors['system_fg'])
             self.chat_box.tag_configure('timestamp_color', foreground=self.light_mode_colors['timestamp_fg'])
+
+        def toggle_fullscreen(self, event=None):
+            """Toggles video fullscreen by hiding/showing UI elements."""
+            self.is_fullscreen = not self.is_fullscreen
+            self.root.attributes("-fullscreen", self.is_fullscreen)
+            
+            if self.is_fullscreen:
+                # Entering fullscreen: hide controls and chat
+                self.control_frame.pack_forget()
+                self.main_pane.forget(self.chat_frame)
+                print("INFO: Video fullscreen enabled.")
+            else:
+                # Exiting fullscreen: restore controls and chat
+                self.control_frame.pack(fill=tk.X, padx=5, pady=5, before=self.main_pane)
+                self.main_pane.add(self.chat_frame)
+                # Ensure sash is visible and positioned reasonably
+                try:
+                    # Attempt to restore a reasonable sash position
+                    self.main_pane.sash_place(0, self.root.winfo_width() - 250, 0)
+                except TclError:
+                    # Fallback if sash cannot be placed (e.g., window not fully mapped)
+                    pass
+                print("INFO: Video fullscreen disabled.")
 
         def toggle_dark_mode(self):
             """Switches the chat box color scheme between light and dark."""
@@ -421,11 +444,9 @@ def run_app():
             """Appends a message to the chat box, with optional timestamp, and scrolls."""
             self.chat_box.config(state=tk.NORMAL)
 
-            # --- NEW: Prepend timestamp if enabled ---
             if self.timestamps_var.get():
                 timestamp_str = f"[{time.strftime('%H:%M:%S')}] "
                 self.chat_box.insert(tk.END, timestamp_str, 'timestamp_color')
-            # --- END NEW ---
 
             try:
                 if message.startswith("System:"):
