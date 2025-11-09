@@ -1,8 +1,13 @@
 # twitch_app.py
-# Version: 1.11.0
+# Version: 1.12.0
 # Author: Systems Architect AI
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
+#   1.12.0: - Replaced .env file with a secure, encrypted credential store (secure_config.dat).
+#           - Added a UI-driven settings dialog for managing Twitch nickname and OAuth token.
+#           - Encryption key is derived from machine-specific identifiers and is not stored.
+#           - Implemented a one-time migration path from a legacy .env file.
+#           - Application now requires credential setup on first run if no config is found.
 #   1.11.0: - Added optional local emote rendering from /emotes subfolder.
 #           - Emotes can be toggled on/off via a "Show Emotes" checkbox.
 #           - Emote mappings loaded from emotes.json file.
@@ -36,7 +41,7 @@ import signal
 # --- Virtual Environment and Dependency Management ---
 
 VENV_DIR = ".venv"
-REQUIREMENTS = ["python-vlc", "python-dotenv", "yt-dlp", "Pillow"]
+REQUIREMENTS = ["python-vlc", "python-dotenv", "yt-dlp", "Pillow", "cryptography"]
 
 def handle_venv():
     """
@@ -101,12 +106,85 @@ def run_app():
         import vlc
         from dotenv import load_dotenv
         from PIL import Image, ImageTk
+        import uuid
+        import hashlib
+        import base64
+        import webbrowser
+        from cryptography.fernet import Fernet
+        from cryptography.fernet import InvalidToken
     except ImportError as e:
         print(f"FATAL: A required library could not be imported: {e}")
         sys.exit(1)
 
 
     # --- Application Classes ---
+
+    class SettingsDialog(tk.Toplevel):
+        """A modal dialog for users to enter and save their credentials."""
+        def __init__(self, parent, app_instance):
+            super().__init__(parent)
+            self.app = app_instance
+            self.title("Settings")
+            self.resizable(False, False)
+
+            # Center the dialog over the parent window
+            parent.update_idletasks()
+            x = parent.winfo_x() + (parent.winfo_width() // 2) - 200
+            y = parent.winfo_y() + (parent.winfo_height() // 2) - 150
+            self.geometry(f"400x300+{x}+{y}")
+
+            main_frame = tk.Frame(self, padx=15, pady=15)
+            main_frame.pack(fill=tk.BOTH, expand=True)
+
+            tk.Label(main_frame, text="Twitch Nickname:").pack(anchor='w')
+            self.nick_entry = tk.Entry(main_frame)
+            self.nick_entry.pack(fill=tk.X, pady=(0, 10))
+
+            tk.Label(main_frame, text="Twitch OAuth Token:").pack(anchor='w')
+            self.token_entry = tk.Entry(main_frame, show="*")
+            self.token_entry.pack(fill=tk.X)
+
+            info_frame = tk.Frame(main_frame)
+            info_frame.pack(fill=tk.X, pady=(5, 15))
+            tk.Label(info_frame, text="Get token:").pack(side=tk.LEFT)
+            link = tk.Label(info_frame, text="https://twitchapps.com/tmi/", fg="blue", cursor="hand2")
+            link.pack(side=tk.LEFT)
+            link.bind("<Button-1>", lambda e: webbrowser.open_new(link.cget("text")))
+
+            # Pre-fill with existing credentials if available
+            if hasattr(self.app, 'TWITCH_NICKNAME') and self.app.TWITCH_NICKNAME:
+                self.nick_entry.insert(0, self.app.TWITCH_NICKNAME)
+
+            button_frame = tk.Frame(main_frame)
+            button_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(10, 0))
+
+            self.save_button = tk.Button(button_frame, text="Save", command=self.save)
+            self.save_button.pack(side=tk.RIGHT)
+            self.cancel_button = tk.Button(button_frame, text="Cancel", command=self.cancel)
+            self.cancel_button.pack(side=tk.RIGHT, padx=(0, 5))
+
+            self.protocol("WM_DELETE_WINDOW", self.cancel)
+            self.transient(parent)
+            self.grab_set()
+
+        def save(self):
+            """Validates and saves the credentials."""
+            nickname = self.nick_entry.get().strip()
+            token = self.token_entry.get().strip()
+
+            if not nickname or not token:
+                messagebox.showerror("Input Error", "Nickname and Token cannot be empty.", parent=self)
+                return
+
+            self.app._save_credentials(nickname, token)
+            self.app.TWITCH_NICKNAME = nickname
+            self.app.TWITCH_OAUTH_TOKEN = token
+            messagebox.showinfo("Success", "Credentials saved securely.", parent=self)
+            self.destroy()
+
+        def cancel(self):
+            """Closes the dialog without saving."""
+            self.destroy()
 
     class TwitchIRCClient(threading.Thread):
         """
@@ -130,7 +208,8 @@ def run_app():
                 self.sock = socket.socket()
                 self.sock.connect((self.server, self.port))
 
-                pass_cmd = f"PASS oauth:{self.token}\r\n"
+                # Note: Twitch expects the token without the "oauth:" prefix here.
+                pass_cmd = f"PASS {self.token}\r\n"
                 nick_cmd = f"NICK {self.nickname}\r\n"
                 join_cmd = f"JOIN #{self.channel}\r\n"
 
@@ -192,7 +271,13 @@ def run_app():
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.root.bind("<Escape>", self.toggle_fullscreen)
 
-            if not self.load_config():
+            self.CONFIG_FILE = Path("secure_config.dat")
+            self.LEGACY_CONFIG_FILE = Path(".env")
+            self.TWITCH_NICKNAME = None
+            self.TWITCH_OAUTH_TOKEN = None
+
+            if not self._initialize_credentials():
+                # User cancelled initial setup, so we exit.
                 self.root.destroy()
                 return
 
@@ -222,6 +307,129 @@ def run_app():
             self.create_widgets()
             self.poll_message_queue()
 
+        def _get_machine_key(self):
+            """
+            Generates a stable, machine-specific key for encryption.
+            The key is derived and not stored on disk.
+            """
+            mac_address = str(uuid.getnode())
+            hostname = socket.gethostname()
+            # Concatenate machine-specific identifiers
+            identifier = f"{mac_address}-{hostname}".encode('utf-8')
+            # Hash the identifier to get a consistent 32-byte key
+            sha256_hash = hashlib.sha256(identifier).digest()
+            # Base64-encode the hash to make it a valid Fernet key
+            key = base64.urlsafe_b64encode(sha256_hash)
+            return key
+
+        def _encrypt_token(self, key, token):
+            """Encrypts a token using the provided key."""
+            f = Fernet(key)
+            return f.encrypt(token.encode('utf-8'))
+
+        def _decrypt_token(self, key, encrypted_token):
+            """Decrypts a token, returning None on failure."""
+            f = Fernet(key)
+            try:
+                # The encrypted token is stored as a base64 string in JSON,
+                # so we need to encode it back to bytes for decryption.
+                decrypted_bytes = f.decrypt(encrypted_token.encode('utf-8'))
+                return decrypted_bytes.decode('utf-8')
+            except InvalidToken:
+                print("ERROR: Decryption failed. The token may be corrupt or from a different machine.")
+                return None
+            except Exception as e:
+                print(f"ERROR: An unexpected error occurred during decryption: {e}")
+                return None
+
+        def _save_credentials(self, nickname, token):
+            """Encrypts and saves credentials to the secure config file."""
+            print(f"INFO: Saving credentials for '{nickname}' to '{self.CONFIG_FILE}'.")
+            key = self._get_machine_key()
+            encrypted_token = self._encrypt_token(key, token)
+            config_data = {
+                "nickname": nickname,
+                "token_encrypted": encrypted_token.decode('utf-8') # Store as string in JSON
+            }
+            with open(self.CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(config_data, f, indent=4)
+            print("INFO: Credentials saved successfully.")
+
+        def _initialize_credentials(self):
+            """
+            Manages loading, migrating, or setting up user credentials on startup.
+            Returns True if credentials are set, False otherwise.
+            """
+            key = self._get_machine_key()
+
+            # 1. Check for secure_config.dat
+            if self.CONFIG_FILE.is_file():
+                print(f"INFO: Loading credentials from '{self.CONFIG_FILE}'.")
+                try:
+                    with open(self.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+                    encrypted_token_str = config_data.get("token_encrypted")
+                    token = self._decrypt_token(key, encrypted_token_str)
+
+                    if token:
+                        self.TWITCH_NICKNAME = config_data.get("nickname")
+                        self.TWITCH_OAUTH_TOKEN = token.replace("oauth:", "")
+                        print("INFO: Credentials successfully loaded and decrypted.")
+                        return True
+                    else:
+                        messagebox.showwarning(
+                            "Decryption Failed",
+                            "Could not decrypt credentials. This can happen if you moved the app to a new computer.\nPlease re-enter your credentials."
+                        )
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    messagebox.showwarning(
+                        "Config Error",
+                        f"The configuration file '{self.CONFIG_FILE}' is corrupt or invalid. Please re-enter your credentials.\n\nError: {e}"
+                    )
+
+            # 2. No valid secure config, check for legacy .env
+            if self.LEGACY_CONFIG_FILE.is_file():
+                print(f"INFO: Found legacy config file '{self.LEGACY_CONFIG_FILE}'.")
+                migrate = messagebox.askyesno(
+                    "Migrate Settings?",
+                    "Found an existing .env file.\n\nDo you want to securely import the credentials from it? The old file will be renamed to .env.imported."
+                )
+                if migrate:
+                    print("INFO: User chose to migrate credentials from .env.")
+                    load_dotenv(dotenv_path=self.LEGACY_CONFIG_FILE)
+                    token = os.getenv("TWITCH_OAUTH_TOKEN")
+                    nickname = os.getenv("TWITCH_NICKNAME")
+                    if token and nickname:
+                        self._save_credentials(nickname, token)
+                        self.TWITCH_NICKNAME = nickname
+                        self.TWITCH_OAUTH_TOKEN = token.replace("oauth:", "")
+                        try:
+                            self.LEGACY_CONFIG_FILE.rename(".env.imported")
+                            print("INFO: Renamed .env to .env.imported.")
+                        except OSError as e:
+                            messagebox.showerror("File Error", f"Could not rename .env file: {e}")
+                        return True
+                    else:
+                        messagebox.showwarning("Migration Failed", ".env file is missing required nickname or token.")
+
+            # 3. No credentials loaded yet, must show settings dialog
+            print("INFO: No valid credentials found. Opening settings dialog for initial setup.")
+            self.root.withdraw()
+            dialog = SettingsDialog(self.root, self)
+            self.root.wait_window(dialog)
+
+            if self.TWITCH_OAUTH_TOKEN and self.TWITCH_NICKNAME:
+                print("INFO: Initial credentials saved successfully.")
+                self.root.deiconify()
+                return True
+            else:
+                print("WARN: User closed the initial settings dialog without saving. Exiting.")
+                return False
+
+        def _open_settings_dialog(self):
+            """Opens the settings dialog for the user to update credentials."""
+            SettingsDialog(self.root, self)
+
         def load_emotes(self):
             """Loads emote mappings from emotes.json and prepares image cache."""
             emotes_json_path = Path("emotes.json")
@@ -237,12 +445,10 @@ def run_app():
                 print(f"WARNING: Failed to load emotes.json: {e}")
                 return
 
-            # Pre-load and cache emote images
             for emote_name, emote_path in self.emote_dict.items():
                 full_path = Path(emote_path)
                 if full_path.is_file():
                     try:
-                        # Load and resize emote to reasonable chat size
                         img = Image.open(full_path)
                         img = img.resize((28, 28), Image.Resampling.LANCZOS)
                         photo = ImageTk.PhotoImage(img)
@@ -253,34 +459,6 @@ def run_app():
                     print(f"WARNING: Emote file not found: {emote_path}")
 
             print(f"INFO: Successfully cached {len(self.emote_images)} emote images")
-
-        def load_config(self):
-            """Loads configuration from .env file."""
-            print("INFO: Loading configuration from .env file.")
-            env_path = Path(".env")
-            if not env_path.is_file():
-                messagebox.showerror(
-                    "Configuration Error",
-                    "The .env file was not found in the script's directory.\n\n"
-                    "Please create a .env file with:\n"
-                    "TWITCH_OAUTH_TOKEN=your_token_here\n"
-                    "TWITCH_NICKNAME=your_twitch_username"
-                )
-                return False
-
-            load_dotenv(dotenv_path=env_path)
-            self.TWITCH_OAUTH_TOKEN = os.getenv("TWITCH_OAUTH_TOKEN")
-            self.TWITCH_NICKNAME = os.getenv("TWITCH_NICKNAME")
-
-            if not self.TWITCH_OAUTH_TOKEN or not self.TWITCH_NICKNAME:
-                messagebox.showerror(
-                    "Configuration Error",
-                    "TWITCH_OAUTH_TOKEN or TWITCH_NICKNAME is missing from the .env file."
-                )
-                return False
-
-            print("INFO: Configuration loaded successfully.")
-            return True
 
         def create_widgets(self):
             """Creates and arranges all the GUI widgets."""
@@ -295,7 +473,10 @@ def run_app():
             self.channel_entry.bind("<Return>", self.load_stream)
 
             self.load_button = tk.Button(self.control_frame, text="Load Stream", command=self.load_stream)
-            self.load_button.pack(side=tk.LEFT, padx=(5, 0))
+            self.load_button.pack(side=tk.LEFT, padx=(5, 10))
+
+            self.settings_button = tk.Button(self.control_frame, text="Settings", command=self._open_settings_dialog)
+            self.settings_button.pack(side=tk.LEFT, padx=(0, 10))
 
             self.volume_var = tk.IntVar(value=100)
             self.volume_slider = tk.Scale(
@@ -306,7 +487,6 @@ def run_app():
             )
             self.volume_slider.pack(side=tk.LEFT, padx=(10, 0))
 
-            # Second row for checkboxes
             self.options_frame = tk.Frame(self.root)
             self.options_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
 
@@ -357,24 +537,19 @@ def run_app():
             """Toggles video fullscreen by hiding/showing UI elements."""
             self.is_fullscreen = not self.is_fullscreen
             self.root.attributes("-fullscreen", self.is_fullscreen)
-            
+
             if self.is_fullscreen:
-                # Entering fullscreen: hide controls and chat
                 self.control_frame.pack_forget()
                 self.options_frame.pack_forget()
                 self.main_pane.forget(self.chat_frame)
                 print("INFO: Video fullscreen enabled.")
             else:
-                # Exiting fullscreen: restore controls and chat
                 self.control_frame.pack(fill=tk.X, padx=5, pady=5, before=self.main_pane)
                 self.options_frame.pack(fill=tk.X, padx=5, pady=(0, 5), before=self.main_pane)
                 self.main_pane.add(self.chat_frame)
-                # Ensure sash is visible and positioned reasonably
                 try:
-                    # Attempt to restore a reasonable sash position
                     self.main_pane.sash_place(0, self.root.winfo_width() - 250, 0)
                 except TclError:
-                    # Fallback if sash cannot be placed (e.g., window not fully mapped)
                     pass
                 print("INFO: Video fullscreen disabled.")
 
@@ -505,39 +680,31 @@ def run_app():
             if not self.emotes_var.get() or not self.emote_images:
                 return [('text', message_text)]
 
-            # Build regex pattern to match emote names
-            # Sort by length descending to match longer emotes first
             emote_names = sorted(self.emote_images.keys(), key=len, reverse=True)
-            # Escape special regex characters in emote names
             escaped_names = [re.escape(name) for name in emote_names]
             pattern = '|'.join(escaped_names)
-            
+
             if not pattern:
                 return [('text', message_text)]
 
             result = []
             last_end = 0
-            
+
             for match in re.finditer(pattern, message_text):
-                # Add text before the emote
                 if match.start() > last_end:
                     result.append(('text', message_text[last_end:match.start()]))
-                
-                # Add the emote
                 result.append(('emote', match.group()))
                 last_end = match.end()
-            
-            # Add remaining text after last emote
+
             if last_end < len(message_text):
                 result.append(('text', message_text[last_end:]))
-            
+
             return result if result else [('text', message_text)]
 
         def add_message_to_chat(self, message):
             """Appends a message to the chat box, with optional timestamp and emotes, and scrolls."""
             self.chat_box.config(state=tk.NORMAL)
 
-            # Add timestamp if enabled
             if self.timestamps_var.get():
                 timestamp_str = f"[{time.strftime('%H:%M:%S')}] "
                 self.chat_box.insert(tk.END, timestamp_str, 'timestamp_color')
@@ -549,18 +716,16 @@ def run_app():
                     separator_index = message.index(': ')
                     username_part = message[:separator_index + 1]
                     message_part = message[separator_index + 1:]
-                    
-                    # Insert username
+
                     self.chat_box.insert(tk.END, username_part, 'username_color')
-                    
-                    # Parse and insert message with emotes
+
                     parsed = self.parse_message_with_emotes(message_part)
                     for item_type, content in parsed:
                         if item_type == 'text':
                             self.chat_box.insert(tk.END, content)
                         elif item_type == 'emote' and content in self.emote_images:
                             self.chat_box.image_create(tk.END, image=self.emote_images[content])
-                    
+
                     self.chat_box.insert(tk.END, "\n")
                 else:
                     self.chat_box.insert(tk.END, message + "\n")
@@ -636,8 +801,8 @@ def run_app():
         if root.winfo_exists():
             root.mainloop()
         else:
-            print("INFO: Application failed to initialize. Exiting.")
-            sys.exit(1)
+            print("INFO: Application initialization was cancelled. Exiting.")
+            sys.exit(0)
     except Exception as e:
         print(f"FATAL: An unhandled exception occurred in the main application: {e}")
         try:
