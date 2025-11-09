@@ -187,7 +187,7 @@ def run_app():
         """
         def __init__(self, root):
             self.root = root
-            self.root.title("Minimalist Python Twitch Client")
+            self.root.title("Twitchy")
             self.root.geometry("1024x768")
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.root.bind("<Escape>", self.toggle_fullscreen)
