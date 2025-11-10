@@ -1,9 +1,12 @@
 # twitchy.py
-# Version: 1.0
+# Version: 1.1.0
 # Author: Dan
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
-#   1.0 first working version
+#   1.1.0: Refactored for production packaging.
+#          - Removed all virtual environment management logic (handle_venv).
+#          - Implemented resolve_asset_path() for bundling-aware asset loading.
+#   1.0:   First working version.
 
 import os
 import sys
@@ -18,67 +21,40 @@ from pathlib import Path
 import signal
 import random
 
-# --- Virtual Environment and Dependency Management ---
+# --- Bundling-Aware Asset Path Resolution ---
 
-VENV_DIR = ".venv"
-# Removed "python-dotenv" and "cryptography" as they are no longer needed.
-REQUIREMENTS = ["python-vlc", "yt-dlp", "Pillow"]
-
-def handle_venv():
+def resolve_asset_path(relative_path):
     """
-    Ensures the script runs inside a virtual environment, creating it and
-    installing dependencies if necessary. Re-launches the script inside the
-    venv if it's not already running there.
+    Get the absolute path to an asset, which works for both development (as a
+    .py script) and for a bundled executable (created by PyInstaller).
+
+    When running as a bundled app, PyInstaller extracts assets to a temporary
+    folder and stores its path in the `sys._MEIPASS` attribute. We check for
+    this attribute to determine the correct base path.
+
+    Args:
+        relative_path (str): The path to the asset relative to the script's location.
+
+    Returns:
+        pathlib.Path: The absolute path to the asset.
     """
-    in_venv = (sys.prefix != sys.base_prefix)
-    if in_venv:
-        return
-
-    print("--- VENV SETUP REQUIRED ---")
-    venv_path = Path(VENV_DIR)
-    script_path = Path(__file__).resolve()
-
-    if sys.platform == "win32":
-        venv_python = venv_path / "Scripts" / "python.exe"
+    # Check if the application is running as a PyInstaller bundle.
+    if hasattr(sys, '_MEIPASS'):
+        # If so, the base path is the temporary folder created by PyInstaller.
+        base_path = Path(sys._MEIPASS)
     else:
-        venv_python = venv_path / "bin" / "python"
+        # Otherwise, we're running in a normal environment, and the base path
+        # is the parent directory of this script file.
+        base_path = Path(__file__).parent
 
-    if not venv_path.exists():
-        print(f"INFO: Creating virtual environment at '{venv_path.resolve()}'...")
-        try:
-            python_executable = sys.executable
-            subprocess.run([python_executable, "-m", "venv", VENV_DIR], check=True)
-            print("INFO: Virtual environment created successfully.")
-        except subprocess.CalledProcessError as e:
-            print(f"FATAL: Failed to create virtual environment. Error: {e}")
-            sys.exit(1)
-
-    print(f"INFO: Installing/verifying packages into '{venv_python}'...")
-    try:
-        subprocess.run(
-            [str(venv_python), "-m", "pip", "install"] + REQUIREMENTS,
-            check=True, capture_output=True, text=True
-        )
-        print("INFO: All required packages are installed/verified.")
-    except subprocess.CalledProcessError as e:
-        stderr_lower = e.stderr.lower()
-        if "failed to establish a new connection" in stderr_lower or "temporary failure in name resolution" in stderr_lower:
-             print("FATAL: A network error occurred while installing dependencies.")
-             print("       Could not connect to the Python Package Index (PyPI) to download packages.")
-             print("       Please check your internet connection, DNS settings, and firewall configuration.")
-        else:
-            print(f"FATAL: Failed to install dependencies. Error: {e.stderr}")
-        sys.exit(1)
-
-
-    print(f"INFO: Re-launching script '{script_path.name}' inside the virtual environment...")
-    os.execv(str(venv_python), [str(venv_python), str(script_path)])
+    # Join the base path with the relative path to get the absolute asset path.
+    return base_path.joinpath(relative_path)
 
 
 def run_app():
     """
-    Contains the main application logic. This function is only called after
-    the virtual environment is verified and all dependencies are installed.
+    Contains the main application logic. This function is now the primary
+    entry point for the application.
     """
     # --- Application-Specific Imports ---
     try:
@@ -87,13 +63,15 @@ def run_app():
         import vlc
         from PIL import Image, ImageTk
     except ImportError as e:
+        # This error is now more critical, as dependencies are expected to be bundled.
         print(f"FATAL: A required library could not be imported: {e}")
+        print("       If running from source, ensure you have installed the packages in requirements.txt.")
+        print("       If running a bundled executable, the package may be corrupt.")
+        # A simple print is often better than a messagebox for fatal startup errors.
         sys.exit(1)
 
 
     # --- Application Classes ---
-
-    # NOTE: The SettingsDialog class has been removed as it is no longer needed.
 
     class TwitchIRCClient(threading.Thread):
         """
@@ -117,13 +95,10 @@ def run_app():
                 self.sock.connect((self.server, self.port))
 
                 # --- Anonymous Login ---
-                # Generate a random username like "justinfan12345" for anonymous access.
                 nickname = f"justinfan{random.randint(10000, 99999)}"
-                # For anonymous login, the token can be any non-empty string.
                 token = "guest"
                 print(f"INFO: Connecting to IRC anonymously as '{nickname}'.")
 
-                # NOTE: The "oauth:" prefix is NOT used for anonymous PASS.
                 pass_cmd = f"PASS {token}\r\n"
                 nick_cmd = f"NICK {nickname}\r\n"
                 join_cmd = f"JOIN #{self.channel}\r\n"
@@ -147,7 +122,6 @@ def run_app():
                             self.sock.send("PONG :tmi.twitch.tv\r\n".encode("utf-8"))
                         elif "PRIVMSG" in resp and f"PRIVMSG #{self.channel}" in resp:
                             try:
-                                # Only process actual chat messages for our channel
                                 username = resp.split('!')[0][1:]
                                 message = resp.split(f'PRIVMSG #{self.channel}')[1].split(':', 1)[1].strip()
                                 formatted_message = f"{username}: {message}"
@@ -186,9 +160,6 @@ def run_app():
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.root.bind("<Escape>", self.toggle_fullscreen)
 
-            # NOTE: All credential management properties and initialization have been removed.
-            # The application no longer requires any user-specific configuration.
-
             self.vlc_instance = None
             self.vlc_player = None
             self.vlc_event_manager = None
@@ -217,21 +188,23 @@ def run_app():
 
         def load_emotes(self):
             """Loads emote mappings from emotes.json and prepares image cache."""
-            emotes_json_path = Path("emotes.json")
+            # REFACTOR: Use the asset resolver to find emotes.json.
+            emotes_json_path = resolve_asset_path("emotes.json")
             if not emotes_json_path.is_file():
-                print("WARNING: emotes.json not found. Emote rendering will be disabled.")
+                print(f"WARNING: emotes.json not found at '{emotes_json_path}'. Emote rendering will be disabled.")
                 return
 
             try:
                 with open(emotes_json_path, 'r', encoding='utf-8') as f:
                     self.emote_dict = json.load(f)
-                print(f"INFO: Loaded {len(self.emote_dict)} emote mappings from emotes.json")
+                print(f"INFO: Loaded {len(self.emote_dict)} emote mappings from {emotes_json_path}")
             except Exception as e:
                 print(f"WARNING: Failed to load emotes.json: {e}")
                 return
 
-            for emote_name, emote_path in self.emote_dict.items():
-                full_path = Path(emote_path)
+            for emote_name, emote_relative_path in self.emote_dict.items():
+                # REFACTOR: Use the asset resolver for each individual emote image.
+                full_path = resolve_asset_path(emote_relative_path)
                 if full_path.is_file():
                     try:
                         img = Image.open(full_path)
@@ -239,9 +212,9 @@ def run_app():
                         photo = ImageTk.PhotoImage(img)
                         self.emote_images[emote_name] = photo
                     except Exception as e:
-                        print(f"WARNING: Failed to load emote {emote_name} from {emote_path}: {e}")
+                        print(f"WARNING: Failed to load emote {emote_name} from {full_path}: {e}")
                 else:
-                    print(f"WARNING: Emote file not found: {emote_path}")
+                    print(f"WARNING: Emote file not found: {full_path}")
 
             print(f"INFO: Successfully cached {len(self.emote_images)} emote images")
 
@@ -259,8 +232,6 @@ def run_app():
 
             self.load_button = tk.Button(self.control_frame, text="Load Stream", command=self.load_stream)
             self.load_button.pack(side=tk.LEFT, padx=(5, 10))
-
-            # NOTE: The "Settings" button has been removed.
 
             self.volume_var = tk.IntVar(value=100)
             self.volume_slider = tk.Scale(
@@ -410,7 +381,6 @@ def run_app():
 
             self.message_queue = queue.Queue()
             self.clear_chat_box()
-            # NOTE: IRC client is now instantiated without credentials.
             self.irc_thread = TwitchIRCClient(
                 channel,
                 self.message_queue
@@ -435,7 +405,7 @@ def run_app():
                     return None
                 return stream_url
             except FileNotFoundError:
-                print("ERROR: yt-dlp command not found. Is it installed in the venv?")
+                print("ERROR: yt-dlp command not found. It must be in the system's PATH or bundled with the app.")
                 return None
             except subprocess.CalledProcessError as e:
                 print(f"ERROR: yt-dlp failed. Error: {e.stderr.strip()}")
@@ -581,13 +551,10 @@ def run_app():
     try:
         root = tk.Tk()
         app = TwitchApp(root)
-        # The check for root.winfo_exists() is now implicit, as the app
-        # no longer has a startup path that destroys the root window.
         root.mainloop()
     except Exception as e:
         print(f"FATAL: An unhandled exception occurred in the main application: {e}")
         try:
-            # This might fail if Tkinter itself is the problem, but it's worth a try.
             messagebox.showerror("Fatal Error", f"An unexpected error occurred:\n\n{e}\n\nThe application will now close.")
         except Exception:
             pass
@@ -595,5 +562,7 @@ def run_app():
 
 
 if __name__ == "__main__":
-    handle_venv()
+    # REFACTOR: The development-time venv handling has been removed.
+    # The application now starts directly, assuming dependencies are
+    # either installed in the environment or bundled with the executable.
     run_app()
