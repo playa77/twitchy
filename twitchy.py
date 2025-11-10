@@ -1,8 +1,22 @@
-# twitch_app.py
-# Version: 1.11.0
+# twitchy.py
+# Version: 1.13.0
 # Author: Systems Architect AI
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
+#   1.13.0: - ARCHITECTURAL REFACTOR: Removed all OAuth token and user authentication.
+#           - The application now connects to Twitch chat anonymously for read-only
+#             access, aligning with the project's core goal of simplicity and
+#             zero-friction use.
+#           - Removed all related UI (Settings), secure storage, and dependency
+#             (python-dotenv, cryptography) code.
+#   1.12.1: - Fixed a regression in the Twitch IRC client where the authentication
+#             command was being sent without the required "oauth:" prefix,
+#             causing the chat connection to fail.
+#   1.12.0: - Replaced .env file with a secure, encrypted credential store (secure_config.dat).
+#           - Added a UI-driven settings dialog for managing Twitch nickname and OAuth token.
+#           - Encryption key is derived from machine-specific identifiers and is not stored.
+#           - Implemented a one-time migration path from a legacy .env file.
+#           - Application now requires credential setup on first run if no config is found.
 #   1.11.0: - Added optional local emote rendering from /emotes subfolder.
 #           - Emotes can be toggled on/off via a "Show Emotes" checkbox.
 #           - Emote mappings loaded from emotes.json file.
@@ -32,11 +46,13 @@ import json
 import re
 from pathlib import Path
 import signal
+import random
 
 # --- Virtual Environment and Dependency Management ---
 
 VENV_DIR = ".venv"
-REQUIREMENTS = ["python-vlc", "python-dotenv", "yt-dlp", "Pillow"]
+# Removed "python-dotenv" and "cryptography" as they are no longer needed.
+REQUIREMENTS = ["python-vlc", "yt-dlp", "Pillow"]
 
 def handle_venv():
     """
@@ -99,7 +115,6 @@ def run_app():
         import tkinter as tk
         from tkinter import messagebox, TclError
         import vlc
-        from dotenv import load_dotenv
         from PIL import Image, ImageTk
     except ImportError as e:
         print(f"FATAL: A required library could not be imported: {e}")
@@ -108,14 +123,15 @@ def run_app():
 
     # --- Application Classes ---
 
+    # NOTE: The SettingsDialog class has been removed as it is no longer needed.
+
     class TwitchIRCClient(threading.Thread):
         """
         A threaded client to connect to Twitch IRC and listen for chat messages.
+        Connects anonymously for read-only chat access.
         """
-        def __init__(self, nickname, token, channel, message_queue):
+        def __init__(self, channel, message_queue):
             super().__init__(daemon=True)
-            self.nickname = nickname
-            self.token = token
             self.channel = channel.lower()
             self.message_queue = message_queue
             self.server = "irc.chat.twitch.tv"
@@ -130,8 +146,16 @@ def run_app():
                 self.sock = socket.socket()
                 self.sock.connect((self.server, self.port))
 
-                pass_cmd = f"PASS oauth:{self.token}\r\n"
-                nick_cmd = f"NICK {self.nickname}\r\n"
+                # --- Anonymous Login ---
+                # Generate a random username like "justinfan12345" for anonymous access.
+                nickname = f"justinfan{random.randint(10000, 99999)}"
+                # For anonymous login, the token can be any non-empty string.
+                token = "guest"
+                print(f"INFO: Connecting to IRC anonymously as '{nickname}'.")
+
+                # NOTE: The "oauth:" prefix is NOT used for anonymous PASS.
+                pass_cmd = f"PASS {token}\r\n"
+                nick_cmd = f"NICK {nickname}\r\n"
                 join_cmd = f"JOIN #{self.channel}\r\n"
 
                 self.sock.send(pass_cmd.encode("utf-8"))
@@ -192,9 +216,8 @@ def run_app():
             self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.root.bind("<Escape>", self.toggle_fullscreen)
 
-            if not self.load_config():
-                self.root.destroy()
-                return
+            # NOTE: All credential management properties and initialization have been removed.
+            # The application no longer requires any user-specific configuration.
 
             self.vlc_instance = None
             self.vlc_player = None
@@ -237,12 +260,10 @@ def run_app():
                 print(f"WARNING: Failed to load emotes.json: {e}")
                 return
 
-            # Pre-load and cache emote images
             for emote_name, emote_path in self.emote_dict.items():
                 full_path = Path(emote_path)
                 if full_path.is_file():
                     try:
-                        # Load and resize emote to reasonable chat size
                         img = Image.open(full_path)
                         img = img.resize((28, 28), Image.Resampling.LANCZOS)
                         photo = ImageTk.PhotoImage(img)
@@ -253,34 +274,6 @@ def run_app():
                     print(f"WARNING: Emote file not found: {emote_path}")
 
             print(f"INFO: Successfully cached {len(self.emote_images)} emote images")
-
-        def load_config(self):
-            """Loads configuration from .env file."""
-            print("INFO: Loading configuration from .env file.")
-            env_path = Path(".env")
-            if not env_path.is_file():
-                messagebox.showerror(
-                    "Configuration Error",
-                    "The .env file was not found in the script's directory.\n\n"
-                    "Please create a .env file with:\n"
-                    "TWITCH_OAUTH_TOKEN=your_token_here\n"
-                    "TWITCH_NICKNAME=your_twitch_username"
-                )
-                return False
-
-            load_dotenv(dotenv_path=env_path)
-            self.TWITCH_OAUTH_TOKEN = os.getenv("TWITCH_OAUTH_TOKEN")
-            self.TWITCH_NICKNAME = os.getenv("TWITCH_NICKNAME")
-
-            if not self.TWITCH_OAUTH_TOKEN or not self.TWITCH_NICKNAME:
-                messagebox.showerror(
-                    "Configuration Error",
-                    "TWITCH_OAUTH_TOKEN or TWITCH_NICKNAME is missing from the .env file."
-                )
-                return False
-
-            print("INFO: Configuration loaded successfully.")
-            return True
 
         def create_widgets(self):
             """Creates and arranges all the GUI widgets."""
@@ -295,7 +288,9 @@ def run_app():
             self.channel_entry.bind("<Return>", self.load_stream)
 
             self.load_button = tk.Button(self.control_frame, text="Load Stream", command=self.load_stream)
-            self.load_button.pack(side=tk.LEFT, padx=(5, 0))
+            self.load_button.pack(side=tk.LEFT, padx=(5, 10))
+
+            # NOTE: The "Settings" button has been removed.
 
             self.volume_var = tk.IntVar(value=100)
             self.volume_slider = tk.Scale(
@@ -306,7 +301,6 @@ def run_app():
             )
             self.volume_slider.pack(side=tk.LEFT, padx=(10, 0))
 
-            # Second row for checkboxes
             self.options_frame = tk.Frame(self.root)
             self.options_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
 
@@ -357,24 +351,19 @@ def run_app():
             """Toggles video fullscreen by hiding/showing UI elements."""
             self.is_fullscreen = not self.is_fullscreen
             self.root.attributes("-fullscreen", self.is_fullscreen)
-            
+
             if self.is_fullscreen:
-                # Entering fullscreen: hide controls and chat
                 self.control_frame.pack_forget()
                 self.options_frame.pack_forget()
                 self.main_pane.forget(self.chat_frame)
                 print("INFO: Video fullscreen enabled.")
             else:
-                # Exiting fullscreen: restore controls and chat
                 self.control_frame.pack(fill=tk.X, padx=5, pady=5, before=self.main_pane)
                 self.options_frame.pack(fill=tk.X, padx=5, pady=(0, 5), before=self.main_pane)
                 self.main_pane.add(self.chat_frame)
-                # Ensure sash is visible and positioned reasonably
                 try:
-                    # Attempt to restore a reasonable sash position
                     self.main_pane.sash_place(0, self.root.winfo_width() - 250, 0)
                 except TclError:
-                    # Fallback if sash cannot be placed (e.g., window not fully mapped)
                     pass
                 print("INFO: Video fullscreen disabled.")
 
@@ -451,9 +440,8 @@ def run_app():
 
             self.message_queue = queue.Queue()
             self.clear_chat_box()
+            # NOTE: IRC client is now instantiated without credentials.
             self.irc_thread = TwitchIRCClient(
-                self.TWITCH_NICKNAME,
-                self.TWITCH_OAUTH_TOKEN,
                 channel,
                 self.message_queue
             )
@@ -505,39 +493,31 @@ def run_app():
             if not self.emotes_var.get() or not self.emote_images:
                 return [('text', message_text)]
 
-            # Build regex pattern to match emote names
-            # Sort by length descending to match longer emotes first
             emote_names = sorted(self.emote_images.keys(), key=len, reverse=True)
-            # Escape special regex characters in emote names
             escaped_names = [re.escape(name) for name in emote_names]
             pattern = '|'.join(escaped_names)
-            
+
             if not pattern:
                 return [('text', message_text)]
 
             result = []
             last_end = 0
-            
+
             for match in re.finditer(pattern, message_text):
-                # Add text before the emote
                 if match.start() > last_end:
                     result.append(('text', message_text[last_end:match.start()]))
-                
-                # Add the emote
                 result.append(('emote', match.group()))
                 last_end = match.end()
-            
-            # Add remaining text after last emote
+
             if last_end < len(message_text):
                 result.append(('text', message_text[last_end:]))
-            
+
             return result if result else [('text', message_text)]
 
         def add_message_to_chat(self, message):
             """Appends a message to the chat box, with optional timestamp and emotes, and scrolls."""
             self.chat_box.config(state=tk.NORMAL)
 
-            # Add timestamp if enabled
             if self.timestamps_var.get():
                 timestamp_str = f"[{time.strftime('%H:%M:%S')}] "
                 self.chat_box.insert(tk.END, timestamp_str, 'timestamp_color')
@@ -549,18 +529,16 @@ def run_app():
                     separator_index = message.index(': ')
                     username_part = message[:separator_index + 1]
                     message_part = message[separator_index + 1:]
-                    
-                    # Insert username
+
                     self.chat_box.insert(tk.END, username_part, 'username_color')
-                    
-                    # Parse and insert message with emotes
+
                     parsed = self.parse_message_with_emotes(message_part)
                     for item_type, content in parsed:
                         if item_type == 'text':
                             self.chat_box.insert(tk.END, content)
                         elif item_type == 'emote' and content in self.emote_images:
                             self.chat_box.image_create(tk.END, image=self.emote_images[content])
-                    
+
                     self.chat_box.insert(tk.END, "\n")
                 else:
                     self.chat_box.insert(tk.END, message + "\n")
@@ -633,14 +611,13 @@ def run_app():
     try:
         root = tk.Tk()
         app = TwitchApp(root)
-        if root.winfo_exists():
-            root.mainloop()
-        else:
-            print("INFO: Application failed to initialize. Exiting.")
-            sys.exit(1)
+        # The check for root.winfo_exists() is now implicit, as the app
+        # no longer has a startup path that destroys the root window.
+        root.mainloop()
     except Exception as e:
         print(f"FATAL: An unhandled exception occurred in the main application: {e}")
         try:
+            # This might fail if Tkinter itself is the problem, but it's worth a try.
             messagebox.showerror("Fatal Error", f"An unexpected error occurred:\n\n{e}\n\nThe application will now close.")
         except Exception:
             pass
@@ -650,4 +627,3 @@ def run_app():
 if __name__ == "__main__":
     handle_venv()
     run_app()
-

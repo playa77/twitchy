@@ -1,0 +1,11 @@
+# Ignore Python virtual environment
+.venv/
+
+# Ignore environment file with secrets
+.env
+
+# Ignore old environment file with secrets
+.env.imported
+
+# Ignore secure data file
+secure_config.dat
