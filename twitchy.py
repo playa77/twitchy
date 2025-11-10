@@ -1,39 +1,9 @@
 # twitchy.py
-# Version: 1.13.0
-# Author: Systems Architect AI
+# Version: 1.0
+# Author: Dan
 # Description: A lightweight, self-contained Twitch client for Ubuntu-based systems.
 # Changelog:
-#   1.13.0: - ARCHITECTURAL REFACTOR: Removed all OAuth token and user authentication.
-#           - The application now connects to Twitch chat anonymously for read-only
-#             access, aligning with the project's core goal of simplicity and
-#             zero-friction use.
-#           - Removed all related UI (Settings), secure storage, and dependency
-#             (python-dotenv, cryptography) code.
-#   1.12.1: - Fixed a regression in the Twitch IRC client where the authentication
-#             command was being sent without the required "oauth:" prefix,
-#             causing the chat connection to fail.
-#   1.12.0: - Replaced .env file with a secure, encrypted credential store (secure_config.dat).
-#           - Added a UI-driven settings dialog for managing Twitch nickname and OAuth token.
-#           - Encryption key is derived from machine-specific identifiers and is not stored.
-#           - Implemented a one-time migration path from a legacy .env file.
-#           - Application now requires credential setup on first run if no config is found.
-#   1.11.0: - Added optional local emote rendering from /emotes subfolder.
-#           - Emotes can be toggled on/off via a "Show Emotes" checkbox.
-#           - Emote mappings loaded from emotes.json file.
-#           - Emotes are displayed inline with chat messages using Tkinter PhotoImage.
-#   1.10.0: - Reworked fullscreen toggle to make the video player truly fullscreen
-#             by hiding other UI elements, correcting the previous "maximize" behavior.
-#   1.9.0:  - Implemented a fullscreen toggle, bound to the <Escape> key.
-#           - Added a label to the UI to inform users of the new keybinding.
-#   1.8.0:  - Added optional, colored timestamps to the chat box, which can be
-#             toggled on/off via a checkbox. Timestamp color is adjusted for
-#             readability in both light and dark modes.
-#   1.7.0:  - Added a dark mode toggle for the chat box. Usernames remain blue
-#             in both light and dark modes for consistent readability.
-#   1.6.0:  - Implemented graceful handling for when a stream ends. The app no
-#             longer crashes and now displays a "Stream has ended" message.
-#           - Instantiated VLC with --ignore-config and --no-osd flags to ensure
-#             a neutral video output, unaffected by local VLC settings.
+#   1.0 first working version
 
 import os
 import sys
