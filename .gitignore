@@ -9,3 +9,5 @@
 
 # Ignore secure data file
 secure_config.dat
+
+video_processor.log
